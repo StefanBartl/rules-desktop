@@ -1,0 +1,17 @@
+# Rust
+/target/
+
+# Node
+node_modules/
+dist/
+
+# Local, per device: never committed (data classes, tokens, rule set paths)
+/sources.json
+/hub.json
+*.local.*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+.claude/

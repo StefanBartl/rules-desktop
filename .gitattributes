@@ -1,0 +1,18 @@
+*.md text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.lua text eol=lf
+*.ts text eol=lf
+*.svelte text eol=lf
+*.css text eol=lf
+*.json text eol=lf
+*.html text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+*.sh text eol=lf
+*.ps1 text eol=lf
+*.py text eol=lf
+# Last, so it wins over the rules above: the fixture vault is byte exact,
+# every etag of the contract is a hash of these bytes.
+e2e/fixture/** -text
