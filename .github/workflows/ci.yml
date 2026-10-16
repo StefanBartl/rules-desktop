@@ -1,0 +1,95 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RULES_ENGINE_DIR: ${{ github.workspace }}/engine/rules.nvim
+  LIB_NVIM_DIR: ${{ github.workspace }}/engine/lib.nvim
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Actions are pinned by commit; the comment names the tag.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          persist-credentials: false
+      - name: Read the pinned engine commits
+        id: engine
+        shell: bash
+        run: |
+          echo "commit=$(sed -n 's/^commit *= *//p' engine.lock)" >> "$GITHUB_OUTPUT"
+          echo "lib_commit=$(sed -n 's/^lib_commit *= *//p' engine.lock)" >> "$GITHUB_OUTPUT"
+      # The pins must exist: a typo in engine.lock fails here, not later.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          repository: StefanBartl/rules.nvim
+          ref: ${{ steps.engine.outputs.commit }}
+          path: engine/rules.nvim
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          repository: StefanBartl/lib.nvim
+          ref: ${{ steps.engine.outputs.lib_commit }}
+          path: engine/lib.nvim
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  # The supply chain: known advisories, licenses, sources, crate age.
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - run: cargo audit
+      - run: cargo deny check
+      # No crate version younger than a week (see tools/check-lock-age.py).
+      - run: python3 tools/check-lock-age.py --min-days 7
+
+  ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          persist-credentials: false
+      # The lockfile is the truth; the age and trust policy are in ui/pnpm-workspace.yaml.
+      - run: npm install --global pnpm@11.28.2
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm audit --audit-level high
+
+  # A control or invisible character in a tracked text file is refused; the tool tests itself.
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover tools
+      - run: python3 tools/check-control-chars.py

@@ -1,0 +1,13 @@
+[package]
+name = "rules-hub"
+version = "0.0.0"
+description = "Hub of rules-desktop: routes, engine method list, adapters (placeholder until the read-only UI phase)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true

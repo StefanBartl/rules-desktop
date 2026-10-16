@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["crates/rules-hub"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+authors = ["Stefan Bartl"]
+repository = "https://github.com/StefanBartl/rules-desktop"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+# The program `rules-hub install` copies: small and quick to start.
+[profile.release]
+lto = "thin"
+strip = true

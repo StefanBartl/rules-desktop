@@ -15,3 +15,5 @@ dist/
 Thumbs.db
 *.swp
 .claude/
+__pycache__/
+*.pyc
