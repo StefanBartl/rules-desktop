@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use appkit_core::authn::{Clock, Secret};
 use appkit_core::identity::AppIdentity;
-use appkit_hub::{serve, GuardRules, HubStatus, Limits, Page, Pages, RunningServer, ServeParts};
+use appkit_hub::{serve, GuardRules, HubStatus, Limits, RunningServer, ServeParts};
 
 mod answer;
 pub mod app;
@@ -23,6 +23,7 @@ mod routes;
 mod runtime;
 pub mod sources;
 pub mod store;
+pub mod ui;
 pub mod watch;
 
 pub use routes::{MakeRoute, Shared, MAX_ID_BYTES, ROUTES};
@@ -61,19 +62,6 @@ pub fn version_line() -> String {
     format!("{} {}", IDENTITY.binary, version())
 }
 
-/// No page yet: the placeholder of the core is served.
-struct NoPages;
-
-impl Pages for NoPages {
-    fn page(&self, _request_path: &str) -> Option<Page> {
-        None
-    }
-
-    fn has_index(&self) -> bool {
-        false
-    }
-}
-
 /// The routes that need a session, by name under `/api/rules/`: every route of [`ROUTES`], so the
 /// security matrix tries each one that is served.
 pub static DATA_ROUTES: LazyLock<Vec<&'static str>> =
@@ -99,6 +87,8 @@ pub struct Start {
     /// The vault to watch for changes, with the timings of the scan. `None`: nothing is watched,
     /// the snapshot changes when a client asks for a rescan or it is too old.
     pub watch: Option<Watch>,
+    /// The files of the page; [`ui::UiFiles::none`] serves the placeholder page of the core.
+    pub ui: ui::UiFiles,
 }
 
 /// Starts the hub.
@@ -119,7 +109,7 @@ pub async fn start(s: Start) -> std::io::Result<RunningServer> {
             app: IDENTITY.app,
             version: version(),
             guard_rules: GuardRules::new(IDENTITY.route("hello"), []),
-            ui: Arc::new(NoPages),
+            ui: Arc::new(s.ui),
             runtime: RulesRuntime::new(s.engine, s.status, s.sources, max_age, s.watch),
             // There is one vault and no list to choose from, so this is never called.
             build: Arc::new(move |()| {

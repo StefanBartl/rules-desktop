@@ -155,6 +155,7 @@ async fn start_classified(
         engine: engine.map(|e| e as Arc<dyn Engine>),
         sources,
         watch,
+        ui: rules_hub::ui::UiFiles::none(),
     })
     .await
     .expect("the hub starts");
@@ -839,4 +840,43 @@ async fn a_bad_search_is_refused_before_the_index_is_asked() {
         let r = hub.get(&format!("{}{bad}", route("search"))).await;
         assert_eq!(r.status, 400, "{bad:?}: {r:?}");
     }
+}
+
+#[tokio::test]
+async fn the_page_of_a_folder_is_served_to_everybody_and_nothing_else_of_it() {
+    let dir = std::env::temp_dir().join(format!("rules-desktop-page-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    std::fs::write(dir.join("index.html"), "<!doctype html><title>x</title>").unwrap();
+    std::fs::write(dir.join("assets").join("app-1.js"), "export {};").unwrap();
+    std::fs::write(dir.join("secret.html"), "no").unwrap();
+    let control = Secret::generate(TOKEN_BYTES).unwrap();
+    let server = rules_hub::start(rules_hub::Start {
+        addr: "127.0.0.1:0".parse().unwrap(),
+        limits: Limits::default(),
+        clock: Arc::new(ManualClock::new()),
+        pairing_ttl: Duration::from_secs(60),
+        control_secret: control,
+        instance: Secret::generate(CODE_BYTES).unwrap(),
+        status: ready(),
+        engine: None,
+        sources: Arc::default(),
+        watch: None,
+        ui: rules_hub::ui::UiFiles::load(&dir).unwrap(),
+    })
+    .await
+    .unwrap();
+    let page = get(&server, "/", None).await;
+    assert_eq!(page.status, 200, "{page:?}");
+    assert!(page.body.contains("<title>x</title>"));
+    assert_eq!(get(&server, "/assets/app-1.js", None).await.status, 200);
+    // Only what the build holds: a file next to it is not there.
+    assert_eq!(get(&server, "/secret.html", None).await.status, 404);
+    let csp = page.header("content-security-policy").unwrap_or_default();
+    assert!(csp.contains("default-src 'none'"), "{csp}");
+    assert!(
+        csp.contains("script-src 'self'") && !csp.contains("unsafe"),
+        "{csp}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

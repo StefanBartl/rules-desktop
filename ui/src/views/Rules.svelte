@@ -1,0 +1,204 @@
+<script lang="ts">
+  // The rule list: filters (family, severity, kind of check), a search over titles and texts, and the rows. j and k
+  // move the cursor, Enter or a click opens the rule. The class of a rule is the hub's word for its file.
+  import MultiSelect from 'appkit-ui/MultiSelect.svelte';
+  import type { App } from '../lib/app.svelte';
+  import { checkKindOf, checkKindsOf, familiesOf, isActive, NO_CHECK, SEVERITIES } from '../lib/filter';
+  import { labelOf, translate, type Key } from '../lib/i18n';
+  import { shownText, titleText } from '../lib/ruletext';
+  import { classLabel } from '../lib/sources';
+
+  let { app }: { app: App } = $props();
+  const t = (key: Key, params: Record<string, string | number> = {}) => translate(app.lang, key, params);
+
+  let search: HTMLInputElement | undefined = $state();
+  // `/` takes the focus to the search box.
+  $effect(() => {
+    if (app.searchFocus > 0) search?.focus();
+  });
+  // The cursor stays in sight as j and k move it.
+  $effect(() => {
+    const id = app.selectedId;
+    if (id !== null) document.getElementById(`rule-${id}`)?.scrollIntoView({ block: 'nearest' });
+  });
+
+  const familyOptions = $derived(familiesOf(app.rules).map((f) => ({ value: f, label: f })));
+  const severityOptions = $derived(SEVERITIES.map((s) => ({ value: s, label: labelOf(app.lang, 'severity', s) })));
+  const checkOptions = $derived(
+    checkKindsOf(app.rules).map((k) => ({ value: k, label: k === NO_CHECK ? t('check.none') : k })),
+  );
+  const shown = $derived(app.shown);
+  const hits = $derived(app.searchHits);
+  const searching = $derived(hits !== null && hits.query === app.filter.query.trim());
+</script>
+
+<section aria-labelledby="rules-h">
+  <h2 id="rules-h">{t('nav.rules')}</h2>
+
+  <div class="bar" role="group" aria-label={t('filter.label')}>
+    <MultiSelect
+      label={t('filter.family')}
+      options={familyOptions}
+      selected={app.filter.families}
+      onchange={(families) => app.setFilter({ ...app.filter, families })}
+      resetLabel={t('filter.reset_one')}
+      searchLabel={t('filter.search_label')}
+    />
+    <MultiSelect
+      label={t('filter.severity')}
+      options={severityOptions}
+      selected={app.filter.severities}
+      onchange={(severities) => app.setFilter({ ...app.filter, severities })}
+      resetLabel={t('filter.reset_one')}
+      searchLabel={t('filter.search_label')}
+    />
+    <MultiSelect
+      label={t('filter.check')}
+      options={checkOptions}
+      selected={app.filter.checkKinds}
+      onchange={(checkKinds) => app.setFilter({ ...app.filter, checkKinds })}
+      resetLabel={t('filter.reset_one')}
+      searchLabel={t('filter.search_label')}
+    />
+    <input
+      bind:this={search}
+      type="search"
+      aria-label={t('filter.search')}
+      placeholder={t('filter.search')}
+      value={app.filter.query}
+      oninput={(e) => void app.setQuery(e.currentTarget.value)}
+      autocomplete="off"
+      spellcheck="false"
+    />
+    {#if isActive(app.filter)}
+      <button type="button" onclick={() => app.resetFilter()}>{t('filter.clear')}</button>
+    {/if}
+  </div>
+
+  <p class="count" role="status">
+    {t('list.count', { shown: shown.length, total: app.rules.length })}
+    {#if searching && hits?.status === 'building'}<span class="note">{t('search.building')}</span>{/if}
+    {#if searching && hits?.status === 'failed'}<span class="note">{t('search.failed')}</span>{/if}
+    {#if searching && hits?.cut}<span class="note">{t('search.cut', { total: hits.total, shown: hits.ids.size })}</span>{/if}
+  </p>
+
+  {#if shown.length === 0}
+    <p class="muted">{t('list.empty')}</p>
+  {:else}
+    <table aria-label={t('list.label')}>
+      <thead>
+        <tr>
+          <th scope="col">{t('list.id')}</th>
+          <th scope="col">{t('list.title')}</th>
+          <th scope="col">{t('list.severity')}</th>
+          <th scope="col">{t('list.check')}</th>
+          <th scope="col">{t('list.class')}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each shown as rule (rule.id)}
+          {@const cls = app.classOfRule(rule)}
+          <tr id={`rule-${rule.id}`} class:cursor={app.selectedId === rule.id} aria-selected={app.selectedId === rule.id}>
+            <th scope="row"><code>{shownText(rule.id)}</code></th>
+            <td class="title">
+              <button type="button" onclick={() => void app.openDetail(rule.id)}>{shownText(titleText(rule.title, rule.id))}</button>
+            </td>
+            <td><span class={`sev ${rule.severity}`}>{labelOf(app.lang, 'severity', rule.severity)}</span></td>
+            <td>{checkKindOf(rule) === NO_CHECK ? t('check.none') : shownText(checkKindOf(rule))}</td>
+            <td><span class={`cls ${cls}`}>{t(classLabel(cls))}</span></td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  {/if}
+</section>
+
+<style>
+  .bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+  input[type='search'] {
+    flex: 1 1 14rem;
+    min-width: 10rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 0.35rem 0.6rem;
+  }
+  .bar > button {
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 0.3rem 0.7rem;
+    cursor: pointer;
+  }
+  .count {
+    margin: 0.3rem 0;
+    color: var(--muted);
+  }
+  .note {
+    margin-left: 0.6rem;
+    color: var(--warn);
+  }
+  .muted {
+    color: var(--muted);
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--line);
+  }
+  th,
+  td {
+    padding: 0.3rem 0.6rem;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: baseline;
+  }
+  thead th {
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+  tr.cursor {
+    background: var(--accent-soft);
+  }
+  .title button {
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+    color: var(--text);
+    text-decoration: underline;
+    text-decoration-color: var(--line);
+  }
+  .title button:hover {
+    text-decoration-color: var(--accent);
+  }
+  .sev,
+  .cls {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-pill);
+    padding: 0.02rem 0.5rem;
+    font-size: 0.78rem;
+    white-space: nowrap;
+  }
+  .sev.critical {
+    border-color: var(--bad);
+    color: var(--bad);
+  }
+  .sev.recommended {
+    border-color: var(--warn);
+    color: var(--warn);
+  }
+  .cls.unclassified,
+  .cls.private {
+    border-color: var(--warn);
+    color: var(--warn);
+  }
+</style>

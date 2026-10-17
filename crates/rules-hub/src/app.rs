@@ -17,6 +17,7 @@ use serde_json::Value;
 use crate::engine::{cli_config, probe, CliEngine, Engine, DISCOVERY};
 use crate::sources::SourcePolicy;
 use crate::store::RefreshOptions;
+use crate::ui::UiFiles;
 use crate::{client, Start, Watch, IDENTITY};
 
 /// What to do when the hub is started.
@@ -170,6 +171,20 @@ pub async fn serve(opts: ServeOptions) -> Result<(), String> {
         );
     }
 
+    let ui = match env.path("RULES_HUB_UI_DIR") {
+        Some(dir) => match UiFiles::load(&dir) {
+            Ok(files) => files,
+            Err(e) => {
+                eprintln!(
+                    "note: the interface in {} cannot be used: {e}",
+                    dir.display()
+                );
+                UiFiles::embedded()
+            }
+        },
+        None => UiFiles::embedded(),
+    };
+
     let state = engine_state(&file.effective(), &env).await;
     if let Some(note) = &state.note {
         eprintln!("{note}");
@@ -191,6 +206,7 @@ pub async fn serve(opts: ServeOptions) -> Result<(), String> {
         status: status.clone(),
         engine: state.engine.clone(),
         sources: Arc::clone(&sources),
+        ui: ui.clone(),
         watch: state.vault.clone().map(|vault| Watch {
             vault,
             refresh: RefreshOptions::default(),

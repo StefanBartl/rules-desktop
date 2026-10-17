@@ -34,6 +34,7 @@ impl Subject for Rules {
             engine: None,
             sources: Arc::default(),
             watch: None,
+            ui: rules_hub::ui::UiFiles::none(),
         }))
     }
 
