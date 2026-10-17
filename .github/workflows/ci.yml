@@ -53,6 +53,10 @@ jobs:
           done
           test "$(ls engine/rules.nvim/schemas/rules-export/1/golden/*.json | wc -l)" = \
             "$(ls crates/rules-hub/tests/fixtures/golden/*.json | wc -l)"
+      # The page's types of the contract are the pinned engine's (its tests import the goldens above).
+      - name: The contract types of the page are those of the pinned engine
+        shell: bash
+        run: cmp engine/rules.nvim/schemas/rules-export/1/rules-export.d.ts ui/src/lib/contract.d.ts
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           components: rustfmt, clippy

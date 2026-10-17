@@ -1,0 +1,64 @@
+// Test data: the golden documents of the pinned engine. They are imported from the copies the Rust tests answer with
+// (crates/rules-hub/tests/fixtures/golden), not copied a second time: the one `cmp` in CI against the pinned engine
+// covers the hub and the page alike.
+
+import type { Error as EngineError, Rule, Snapshot } from './contract';
+import type { HubSources } from './api';
+import goldenError from '../../../crates/rules-hub/tests/fixtures/golden/error.json';
+import goldenRule from '../../../crates/rules-hub/tests/fixtures/golden/rule.json';
+import goldenSnapshot from '../../../crates/rules-hub/tests/fixtures/golden/snapshot.json';
+
+/** A JSON import is typed by its values (`kind: string`); the kind is checked, then it is the contract's type. */
+function ofKind<T>(doc: { kind: string }, kind: string): T {
+  if (doc.kind !== kind) throw new Error(`golden document of kind ${doc.kind}, expected ${kind}`);
+  return doc as unknown as T;
+}
+
+/** A fresh copy each time: a test that changes it does not change it for the next one. */
+function copy<T>(doc: T): T {
+  return structuredClone(doc);
+}
+
+/** `rules.snapshot`: four rules in three files (DEP-01, DEP-09, ERR-100, LUA-01). */
+export function snapshotDoc(): Snapshot {
+  return copy(ofKind<Snapshot>(goldenSnapshot, 'rules.snapshot'));
+}
+
+/** `rules.rule` of DEP-01 with its text and its check. */
+export function ruleDoc(): Rule {
+  return copy(ofKind<Rule>(goldenRule, 'rules.rule'));
+}
+
+/** `rules.error`: not_found. */
+export function errorDoc(): EngineError {
+  return copy(ofKind<EngineError>(goldenError, 'rules.error'));
+}
+
+/** The text of a golden document as the hub passes it on. */
+export function goldenText(name: 'snapshot' | 'rule' | 'error'): string {
+  const doc = name === 'snapshot' ? goldenSnapshot : name === 'rule' ? goldenRule : goldenError;
+  return JSON.stringify(doc);
+}
+
+/**
+ * What `GET /api/rules/sources` answers for the golden snapshot with a `sources.json` that holds
+ * `{"Checklists": {"class": "internal"}, "Checklists/_rules": {"class": "private"}}` and no default, written out
+ * as the hub writes it. The page reads the classes from here; it never works one out.
+ */
+export function hubSourcesDoc(): HubSources {
+  return {
+    schema: 1,
+    kind: 'hub.sources',
+    files: [
+      { path: 'Checklists/DEP.md', data_class: 'internal', rules: 2, key: 'Checklists' },
+      { path: 'Checklists/LUA.md', data_class: 'internal', rules: 1, key: 'Checklists' },
+      { path: 'Checklists/_rules/ERR/ERR-100.md', data_class: 'private', rules: 1, key: 'Checklists/_rules' },
+    ],
+    keys: [
+      { key: 'Checklists', class: 'internal', files: 3 },
+      { key: 'Checklists/_rules', class: 'private', files: 1 },
+    ],
+    unclassified: [],
+    private: ['Checklists/_rules/ERR/ERR-100.md'],
+  };
+}
