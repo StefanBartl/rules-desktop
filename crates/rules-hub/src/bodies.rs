@@ -2,26 +2,34 @@
 //!
 //! The kit's index asks the call [`Calls::Bodies`] for pages `{rev, items: [{id, etag, body}],
 //! next_offset}`, for `{offset, limit}` (every document) and `{ids, offset, limit}` (the named
-//! ones). `rules-export/1` has no such call, so [`BodiesEngine`] answers it inside the hub: it asks
-//! `snapshot` for the ids and `rule` for each text, and passes every other call on unchanged. The
-//! page it writes never leaves the hub; it only feeds the index.
+//! ones). `rules-export/1` has no such call, so [`BodiesEngine`] answers it inside the hub: it takes
+//! the ids from a snapshot and asks `rule` for each text, and passes every other call on unchanged.
+//! The page it writes never leaves the hub; it only feeds the index.
 //!
-//! - A page is read from one state of the rule sets: every `rule` document must carry the `rev`
-//!   of the snapshot the ids came from, else the page is read again (at most [`PAGE_TRIES`]
-//!   times) and then refused, and the index keeps what it had. The index itself only compares the
-//!   `rev` between pages.
+//! - A page is read from one state of the rule sets: both the snapshot and every `rule` document
+//!   must carry a `rev`, and every `rule` document the `rev` of the snapshot the ids came from,
+//!   else the page is read again (at most [`PAGE_TRIES`] times) and then refused, and the index
+//!   keeps what it had. The index itself only compares the `rev` between pages.
+//! - The first read of a page takes the snapshot the store holds, when there is one, instead of a
+//!   scan of its own; only a read again asks the engine for a fresh snapshot.
 //! - A page costs a `rule` question per rule. Without a running host each would be a Neovim
-//!   process of its own, so the text is only read while the engine's host runs; otherwise the call
-//!   is refused and the search says it failed (the title search of the page goes on).
+//!   process of its own, so the text is only read while the engine's host runs: a host that is not
+//!   running is asked one `hello` (which starts a host that can start) and the page is refused if
+//!   it still does not run, and the host is looked at again before every `rule`, so a host that
+//!   dies or is left alone while a page is read ends the page instead of a process per rule. The
+//!   search then says it failed (the title search of the page goes on).
+//! - What each page came to is noted for [`crate::indexer`], which rebuilds the index when a page
+//!   for a change failed or was of another state than the change.
 
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use appkit_hub::BoxFuture;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::engine::{CallFuture, Calls, CliEngine, Engine, EngineError, Method, Reply};
+use crate::store::SnapshotStore;
 
 /// Reads of a page before it is refused, when the rules keep changing under it.
 pub const PAGE_TRIES: usize = 3;
@@ -41,30 +49,97 @@ impl HostedEngine for CliEngine {
     }
 }
 
+/// What the pages asked since the log was last taken.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct PageLog {
+    /// A page was refused.
+    pub(crate) failed: bool,
+    /// The `rev` of each page of named ids that was answered.
+    pub(crate) id_revs: Vec<Option<String>>,
+}
+
 /// The engine with the call `bodies` answered in the hub (see the module).
 pub struct BodiesEngine {
     inner: Arc<dyn HostedEngine>,
+    /// The store whose held snapshot a page is read from first.
+    store: Option<Arc<SnapshotStore>>,
+    log: Mutex<PageLog>,
 }
 
 impl BodiesEngine {
     #[must_use]
     pub fn new(inner: Arc<dyn HostedEngine>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            store: None,
+            log: Mutex::new(PageLog::default()),
+        }
+    }
+
+    /// Read the first try of a page from the snapshot this store holds.
+    #[must_use]
+    pub fn with_store(mut self, store: Arc<SnapshotStore>) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    /// What the pages came to since the last call.
+    pub(crate) fn take_log(&self) -> PageLog {
+        std::mem::take(
+            &mut *self
+                .log
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     async fn bodies(&self, params: Option<&Value>) -> Result<Reply, EngineError> {
         let request = BodiesRequest::read(params)?;
-        if !self.inner.host_running().await {
-            return Err(EngineError::Spawn(
-                "the texts of the rules are read only while the engine's host runs".to_owned(),
-            ));
+        let result = self.read(&request).await;
+        let mut log = self
+            .log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match &result {
+            Ok((rev, _)) if request.ids.is_some() => log.id_revs.push(Some(rev.clone())),
+            Ok(_) => {}
+            Err(_) => log.failed = true,
         }
-        for _ in 0..PAGE_TRIES {
-            if let Some(page) = self.read_page(&request).await? {
-                return Ok(Reply {
-                    kind: Calls::Bodies.reply_kind().to_owned(),
-                    text: page.to_string(),
-                });
+        drop(log);
+        result.map(|(_, page)| Reply {
+            kind: Calls::Bodies.reply_kind().to_owned(),
+            text: page.to_string(),
+        })
+    }
+
+    async fn read(&self, request: &BodiesRequest) -> Result<(String, Value), EngineError> {
+        if !self.inner.host_running().await {
+            // A host starts with the first question it is asked: one cheap one, so a hub whose
+            // index is built before anything else was asked still reads through a host. An
+            // engine without a host answers it by a process of its own and stays refused.
+            let _ = self.inner.call(Calls::Hello, None).await;
+            if !self.inner.host_running().await {
+                return Err(no_host());
+            }
+        }
+        for attempt in 0..PAGE_TRIES {
+            let held = if attempt == 0 {
+                self.store.as_ref().and_then(|s| s.latest())
+            } else {
+                None
+            };
+            let snapshot = match held {
+                Some(cached) => SnapshotIds::read(&cached.text)?,
+                None => SnapshotIds::read(
+                    self.inner
+                        .call(Calls::Snapshot, None)
+                        .await?
+                        .text
+                        .as_bytes(),
+                )?,
+            };
+            if let Some(page) = self.read_page(request, snapshot).await? {
+                return Ok(page);
             }
         }
         Err(EngineError::Protocol(
@@ -73,10 +148,12 @@ impl BodiesEngine {
     }
 
     /// One page from one state of the rules; `None` when the state changed while it was read.
-    async fn read_page(&self, request: &BodiesRequest) -> Result<Option<Value>, EngineError> {
-        let reply = self.inner.call(Calls::Snapshot, None).await?;
-        let snapshot: SnapshotIds = serde_json::from_str(&reply.text)
-            .map_err(|e| EngineError::Protocol(format!("a snapshot without its rules: {e}")))?;
+    async fn read_page(
+        &self,
+        request: &BodiesRequest,
+        snapshot: SnapshotIds,
+    ) -> Result<Option<(String, Value)>, EngineError> {
+        let rev = snapshot.rev;
         let all: Vec<String> = snapshot.rules.into_iter().map(|r| r.id).collect();
         // The named ids in the order they were named, each once and only those of the snapshot:
         // no id that is not one of its rules reaches the engine.
@@ -97,6 +174,11 @@ impl BodiesEngine {
         let end = start.saturating_add(request.limit).min(wanted.len());
         let mut items = Vec::with_capacity(end - start);
         for id in &wanted[start..end] {
+            // Looked at before every rule: a host that died or is left alone would leave each
+            // remaining rule to a process of its own.
+            if !self.inner.host_running().await {
+                return Err(no_host());
+            }
             let rule = match self
                 .inner
                 .call(Calls::Rule, Some(&json!({ "id": id })))
@@ -115,20 +197,32 @@ impl BodiesEngine {
             };
             let doc: RuleText = serde_json::from_str(&rule.text)
                 .map_err(|e| EngineError::Protocol(format!("a rule without its text: {e}")))?;
-            if doc.rev != snapshot.rev {
+            let Some(doc_rev) = doc.rev else {
+                return Err(EngineError::Protocol(
+                    "a rule document without its rev".to_owned(),
+                ));
+            };
+            if doc_rev != rev {
                 return Ok(None);
             }
             items.push(json!({ "id": id, "etag": doc.rule.etag, "body": doc.rule.text }));
         }
         let next_offset = (end < wanted.len()).then_some(end);
-        Ok(Some(json!({
+        let page = json!({
             "schema": 1,
             "kind": Calls::Bodies.reply_kind(),
-            "rev": snapshot.rev,
+            "rev": rev,
             "items": items,
             "next_offset": next_offset,
-        })))
+        });
+        Ok(Some((rev, page)))
     }
+}
+
+fn no_host() -> EngineError {
+    EngineError::Spawn(
+        "the texts of the rules are read only while the engine's host runs".to_owned(),
+    )
 }
 
 impl Engine for BodiesEngine {
@@ -176,8 +270,18 @@ impl BodiesRequest {
 
 #[derive(Deserialize)]
 struct SnapshotIds {
-    rev: Option<String>,
+    rev: String,
     rules: Vec<RuleId>,
+}
+
+impl SnapshotIds {
+    /// The ids and the `rev` of a snapshot; a snapshot without either is refused: without its
+    /// `rev` no page could be told to be of one state.
+    fn read(text: &[u8]) -> Result<Self, EngineError> {
+        serde_json::from_slice(text).map_err(|e| {
+            EngineError::Protocol(format!("a snapshot without its rules or its rev: {e}"))
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -199,7 +303,7 @@ struct RuleBody {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Mutex;
 
@@ -208,30 +312,54 @@ mod tests {
 
     /// Rules by id with a text; `rev` of the snapshot and of every rule document, which a test may
     /// let move after a number of `rule` answers.
-    struct Fake {
-        rules: Mutex<Vec<(&'static str, &'static str)>>,
-        rev: Mutex<String>,
+    pub(crate) struct Fake {
+        pub(crate) rules: Mutex<Vec<(&'static str, &'static str)>>,
+        pub(crate) rev: Mutex<String>,
         /// After this many `rule` answers the rev moves on once (a change while a page is read).
         move_after: Mutex<Option<usize>>,
-        host: AtomicBool,
+        pub(crate) host: AtomicBool,
+        /// `hello` starts the host, as the first question to a `CliEngine` with a host does.
+        start_on_hello: AtomicBool,
+        /// From this `rule` answer on the host is no longer running (it died, or is left alone
+        /// after its failures).
+        host_stops_after: Mutex<Option<usize>>,
+        /// The documents carry no `rev`.
+        omit_rev: AtomicBool,
         asked: Mutex<Vec<String>>,
         rule_calls: AtomicUsize,
     }
 
     impl Fake {
-        fn new(rules: &[(&'static str, &'static str)]) -> Arc<Self> {
+        pub(crate) fn new(rules: &[(&'static str, &'static str)]) -> Arc<Self> {
             Arc::new(Self {
                 rules: Mutex::new(rules.to_vec()),
                 rev: Mutex::new("rev:1".to_owned()),
                 move_after: Mutex::new(None),
                 host: AtomicBool::new(true),
+                start_on_hello: AtomicBool::new(false),
+                host_stops_after: Mutex::new(None),
+                omit_rev: AtomicBool::new(false),
                 asked: Mutex::new(Vec::new()),
                 rule_calls: AtomicUsize::new(0),
             })
         }
 
-        fn asked(&self) -> Vec<String> {
+        pub(crate) fn asked(&self) -> Vec<String> {
             self.asked.lock().unwrap().clone()
+        }
+
+        fn count(&self, what: &str) -> usize {
+            self.asked()
+                .iter()
+                .filter(|a| a.split(' ').next() == Some(what))
+                .count()
+        }
+
+        fn stamp(&self, mut doc: Value) -> String {
+            if self.omit_rev.load(Ordering::SeqCst) {
+                doc.as_object_mut().unwrap().remove("rev");
+            }
+            doc.to_string()
         }
     }
 
@@ -246,6 +374,12 @@ mod tests {
                 self.asked.lock().unwrap().push(shown);
                 let rev = self.rev.lock().unwrap().clone();
                 let text = match name {
+                    "hello" => {
+                        if self.start_on_hello.load(Ordering::SeqCst) {
+                            self.host.store(true, Ordering::SeqCst);
+                        }
+                        "{}".to_owned()
+                    }
                     "snapshot" => {
                         let rules: Vec<Value> = self
                             .rules
@@ -254,10 +388,18 @@ mod tests {
                             .iter()
                             .map(|(id, _)| json!({ "id": id, "etag": "sha256:1" }))
                             .collect();
-                        json!({ "rev": rev, "rules": rules }).to_string()
+                        self.stamp(json!({ "rev": rev, "rules": rules }))
                     }
                     "rule" => {
                         let n = self.rule_calls.fetch_add(1, Ordering::SeqCst) + 1;
+                        if self
+                            .host_stops_after
+                            .lock()
+                            .unwrap()
+                            .is_some_and(|k| n >= k)
+                        {
+                            self.host.store(false, Ordering::SeqCst);
+                        }
                         let id = params.and_then(|p| p["id"].as_str()).unwrap();
                         let found = self
                             .rules
@@ -280,8 +422,10 @@ mod tests {
                             *self.rev.lock().unwrap() = "rev:2".to_owned();
                         }
                         let rev = self.rev.lock().unwrap().clone();
-                        json!({ "rev": rev, "rule": { "etag": format!("sha256:{id}"), "text": text } })
-                            .to_string()
+                        self.stamp(json!({
+                            "rev": rev,
+                            "rule": { "etag": format!("sha256:{id}"), "text": text },
+                        }))
                     }
                     other => panic!("asked {other}"),
                 };
@@ -450,7 +594,121 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, EngineError::Spawn(_)), "{err}");
-        assert!(fake.asked().is_empty(), "{:?}", fake.asked());
+        // One hello, which an engine without a host answers by a process of its own; no
+        // snapshot and no rule.
+        assert_eq!(fake.asked(), ["hello"]);
+    }
+
+    /// K10: a host starts with the first question, and the first build of the index may come
+    /// before anything else was asked.
+    #[tokio::test]
+    async fn a_host_that_is_not_started_yet_is_started_by_a_hello() {
+        let fake = Fake::new(&[("A-1", "one")]);
+        fake.host.store(false, Ordering::SeqCst);
+        fake.start_on_hello.store(true, Ordering::SeqCst);
+        let engine = BodiesEngine::new(fake.clone());
+        let doc = page(&engine, json!({ "offset": 0, "limit": 10 }))
+            .await
+            .unwrap();
+        assert_eq!(doc["items"][0]["body"], "one");
+        assert_eq!(fake.asked()[0], "hello");
+    }
+
+    /// K10: a host that dies or is left alone while a page is read ends the page; the rules left
+    /// are not asked, each of which would be a process of its own.
+    #[tokio::test]
+    async fn a_host_that_stops_while_a_page_is_read_ends_the_page() {
+        let fake = Fake::new(&[("A-1", "one"), ("A-2", "two"), ("A-3", "three")]);
+        *fake.host_stops_after.lock().unwrap() = Some(1);
+        let engine = BodiesEngine::new(fake.clone());
+        let err = page(&engine, json!({ "offset": 0, "limit": 10 }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::Spawn(_)), "{err}");
+        assert_eq!(fake.count("rule"), 1, "{:?}", fake.asked());
+        assert!(engine.take_log().failed);
+    }
+
+    /// K9: without a `rev` no page can be told to be of one state.
+    #[tokio::test]
+    async fn documents_without_their_rev_are_refused() {
+        let fake = Fake::new(&[("A-1", "one")]);
+        fake.omit_rev.store(true, Ordering::SeqCst);
+        let engine = BodiesEngine::new(fake.clone());
+        let err = page(&engine, json!({ "offset": 0, "limit": 10 }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::Protocol(_)), "{err}");
+
+        // A snapshot with its rev, and rule documents without one.
+        struct NoRuleRev(Arc<Fake>);
+        impl Engine for NoRuleRev {
+            fn call<'a>(&'a self, method: Method, params: Option<&'a Value>) -> CallFuture<'a> {
+                Box::pin(async move {
+                    let mut reply = self.0.call(method, params).await?;
+                    if method == Calls::Rule {
+                        let mut doc: Value = serde_json::from_str(&reply.text).unwrap();
+                        doc.as_object_mut().unwrap().remove("rev");
+                        reply.text = doc.to_string();
+                    }
+                    Ok(reply)
+                })
+            }
+        }
+        impl HostedEngine for NoRuleRev {
+            fn host_running(&self) -> BoxFuture<'_, bool> {
+                self.0.host_running()
+            }
+        }
+        let engine = BodiesEngine::new(Arc::new(NoRuleRev(Fake::new(&[("A-1", "one")]))));
+        let err = page(&engine, json!({ "offset": 0, "limit": 10 }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::Protocol(_)), "{err}");
+    }
+
+    pub(crate) fn store_of(fake: &Arc<Fake>) -> Arc<SnapshotStore> {
+        SnapshotStore::new(
+            Some(Arc::clone(fake) as Arc<dyn Engine>),
+            crate::store::SHAPE,
+            crate::store::StoreOptions {
+                max_age: None,
+                ..crate::store::StoreOptions::default()
+            },
+        )
+    }
+
+    /// A page is first read from the snapshot the store holds: no scan of its own.
+    #[tokio::test]
+    async fn a_page_takes_the_ids_of_the_snapshot_the_store_holds() {
+        let fake = Fake::new(&[("A-1", "one"), ("A-2", "two")]);
+        let store = store_of(&fake);
+        store.current().await.unwrap();
+        assert_eq!(fake.count("snapshot"), 1);
+        let engine = BodiesEngine::new(fake.clone()).with_store(store);
+        let doc = page(&engine, json!({ "ids": ["A-2"], "offset": 0, "limit": 10 }))
+            .await
+            .unwrap();
+        assert_eq!(doc["items"][0]["body"], "two");
+        assert_eq!(doc["rev"], "rev:1");
+        assert_eq!(fake.count("snapshot"), 1, "{:?}", fake.asked());
+        assert_eq!(
+            engine.take_log(),
+            PageLog {
+                failed: false,
+                id_revs: vec![Some("rev:1".to_owned())],
+            }
+        );
+
+        // The held snapshot is older than the rules: the page is read again from a fresh one.
+        *fake.rev.lock().unwrap() = "rev:2".to_owned();
+        let doc = page(&engine, json!({ "offset": 0, "limit": 10 }))
+            .await
+            .unwrap();
+        assert_eq!(doc["rev"], "rev:2");
+        assert_eq!(fake.count("snapshot"), 2, "{:?}", fake.asked());
+        // A page of every rule is no page of named ids.
+        assert_eq!(engine.take_log(), PageLog::default());
     }
 
     #[tokio::test]

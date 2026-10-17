@@ -17,6 +17,7 @@ mod answer;
 pub mod bodies;
 pub mod engine;
 mod events;
+mod indexer;
 mod routes;
 mod runtime;
 pub mod sources;

@@ -132,6 +132,10 @@ pub(crate) async fn events(
             "event: hello\ndata: {}\n\n",
             json!({ "rev": rev, "seq": seq, "instance": instance })
         );
+        // The hello too: the session may have been closed while the snapshot was read.
+        if !shared.sessions.check(&token) {
+            return;
+        }
         if tx.send(Bytes::from(hello)).await.is_err() {
             return;
         }

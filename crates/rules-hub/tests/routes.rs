@@ -44,6 +44,8 @@ struct FakeEngine {
     hello: Mutex<Result<String, ()>>,
     texts: Mutex<HashMap<String, String>>,
     host: AtomicBool,
+    /// While set, `snapshot` waits for a permit of it.
+    snapshot_gate: Mutex<Option<Arc<tokio::sync::Semaphore>>>,
     asked: Mutex<Vec<(&'static str, Option<Value>)>>,
 }
 
@@ -54,6 +56,7 @@ impl FakeEngine {
             hello: Mutex::new(Ok(HELLO.trim_end().to_owned())),
             texts: Mutex::new(HashMap::new()),
             host: AtomicBool::new(false),
+            snapshot_gate: Mutex::new(None),
             asked: Mutex::new(Vec::new()),
         })
     }
@@ -135,7 +138,13 @@ impl Engine for FakeEngine {
                     .unwrap()
                     .clone()
                     .map_err(|()| EngineError::Timeout)?,
-                "snapshot" => self.snapshot.lock().unwrap().clone(),
+                "snapshot" => {
+                    let gate = self.snapshot_gate.lock().unwrap().clone();
+                    if let Some(gate) = gate {
+                        drop(gate.acquire().await.unwrap());
+                    }
+                    self.snapshot.lock().unwrap().clone()
+                }
                 "rule" => {
                     let id = params.and_then(|p| p["id"].as_str()).unwrap_or_default();
                     self.rule(id)?
@@ -922,6 +931,42 @@ async fn a_stream_ends_with_its_session_before_it_is_told_another_id() {
     assert!(
         seen.iter().all(|m| !m.contains("event: rules")),
         "an id went to a closed session: {seen:?}"
+    );
+}
+
+/// K22: the session is checked before the hello too. It may be closed while the snapshot the
+/// stream starts from is read.
+#[tokio::test]
+async fn a_stream_whose_session_is_closed_while_it_opens_is_not_greeted() {
+    let engine = FakeEngine::new();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    *engine.snapshot_gate.lock().unwrap() = Some(Arc::clone(&gate));
+    let hub = Rig {
+        engine: Some(Arc::clone(&engine)),
+        max_sessions: 2,
+        ..Rig::default()
+    }
+    .start()
+    .await;
+    let opening = Sse::open(&hub.server, Some(&hub.token));
+    let closing = async {
+        let deadline = tokio::time::Instant::now() + WAIT;
+        while engine.count("snapshot") == 0 {
+            assert!(tokio::time::Instant::now() < deadline, "no snapshot asked");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Two newer sessions close the one of the stream while it waits for the snapshot.
+        session(&hub.server, &hub.control).await;
+        session(&hub.server, &hub.control).await;
+        gate.add_permits(1000);
+    };
+    let (old, ()) = tokio::join!(opening, closing);
+    let mut old = old.expect("the stream opens");
+    let (ended, seen) = old.ended(WAIT).await;
+    assert!(ended, "the stream outlived its session: {seen:?}");
+    assert!(
+        seen.iter().all(|m| !m.contains("event: hello")),
+        "a closed session was greeted: {seen:?}"
     );
 }
 

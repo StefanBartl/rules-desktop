@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use appkit_hub::search::{spawn_indexer, SearchIndex};
+use appkit_hub::search::SearchIndex;
 use appkit_hub::{HubStatus, Runtime};
 use axum::body::Bytes;
 use serde::Deserialize;
@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 use crate::bodies::{BodiesEngine, HostedEngine};
 use crate::engine::{Calls, Engine};
 use crate::events::StreamCounter;
+use crate::indexer::{self, Indexer};
 use crate::sources::{SourceFile, SourcePolicy};
 use crate::store::{spawn_refresher, Cached, RefreshOptions, SnapshotStore, StoreOptions, SHAPE};
 use crate::watch::{self, Hint};
@@ -119,15 +120,18 @@ impl RulesRuntime {
                 ..StoreOptions::default()
             },
         );
-        let search = hosted.map(|hosted| {
-            let bodies: Arc<dyn Engine> = Arc::new(BodiesEngine::new(hosted));
-            SearchIndex::new(bodies, Calls::Bodies)
+        // The first read of a page takes the snapshot the store holds.
+        let indexing = hosted.map(|hosted| {
+            let bodies = Arc::new(BodiesEngine::new(hosted).with_store(Arc::clone(&store)));
+            let index = SearchIndex::new(Arc::clone(&bodies) as Arc<dyn Engine>, Calls::Bodies);
+            (index, bodies)
         });
+        let search = indexing.as_ref().map(|(index, _)| Arc::clone(index));
         let mut jobs = Vec::new();
         let (mut hints, mut watcher) = (None, None);
         if engine.is_some() {
-            if let Some(index) = &search {
-                jobs.push(spawn_indexer(Arc::clone(index), &store));
+            if let Some((index, bodies)) = indexing {
+                jobs.push(indexer::spawn(Indexer::new(index, bodies), &store));
             }
             // The watcher only says "look again"; the refresher does the looking.
             let (tx, rx) = mpsc::unbounded_channel();
