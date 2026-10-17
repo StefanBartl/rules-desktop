@@ -22,7 +22,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import date, datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 USER_AGENT = "rules-desktop-lock-age-check (https://github.com/StefanBartl/rules-desktop)"
 
@@ -38,20 +38,28 @@ def locked_registry_packages(lock_text):
 
 
 def published(name, version):
-    """The day a version was published, from the crates.io API."""
+    """The moment a version was published (UTC), from the crates.io API."""
     url = f"https://crates.io/api/v1/crates/{name}/{version}"
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     for attempt in range(4):
         try:
             with urllib.request.urlopen(request, timeout=20) as response:
                 text = json.load(response)["version"]["created_at"]
-            return date.fromisoformat(text[:10])
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
         except urllib.error.HTTPError as err:
             if err.code == 429 and attempt < 3:
                 time.sleep(5 * (attempt + 1))
                 continue
             raise
     raise RuntimeError("unreachable")
+
+
+def too_young(age, min_days):
+    """Is a version of this age (the time since it was published) younger than `min_days` days?
+
+    Elapsed time, not calendar days: a version published late on one day is not a day older at midnight.
+    """
+    return age < timedelta(days=min_days)
 
 
 def main():
@@ -62,22 +70,22 @@ def main():
 
     with open(args.lock, encoding="utf-8") as handle:
         packages = sorted(set(locked_registry_packages(handle.read())))
-    today = datetime.now(timezone.utc).date()
+    now = datetime.now(timezone.utc)
 
     young = []
     for name, version in packages:
         try:
-            age = (today - published(name, version)).days
+            age = now - published(name, version)
         except Exception as err:  # noqa: BLE001 - any failure means "not checked"
             print(f"cannot check {name} {version}: {err}", file=sys.stderr)
             return 2
-        if age < args.min_days:
-            young.append((age, name, version))
+        if too_young(age, args.min_days):
+            young.append((age.total_seconds() / 86400, name, version))
         time.sleep(1.05)
 
     print(f"{len(packages)} registry crates checked, minimum age {args.min_days} days")
     for age, name, version in sorted(young):
-        print(f"  too young: {name} {version} ({age} days)")
+        print(f"  too young: {name} {version} ({age:.1f} days)")
     return 1 if young else 0
 
 

@@ -5,8 +5,8 @@ browse the rules, search them, and later create, change, retire and move them, i
 native app after that. The sibling of [tasks-desktop](https://github.com/StefanBartl/tasks-desktop), built on the same
 parts and meant to look and behave like it.
 
-**Status: planning. Nothing is built and nothing is released.** This repository holds the project description so far;
-the code follows the phases below. Do not expect a download.
+**Status: early development. Nothing is released.** The hub starts on the shared kit and passes its security matrix,
+and the page loads the kit's tokens; the rule views and commands follow the phases below. Do not expect a download.
 
 ## What it is for
 
@@ -45,14 +45,14 @@ It is **not** a place to run the checks or to let an agent work the manual rules
 
 The planning notes live outside this repository, in the maintainer's task vault.
 
-## Layout (planned)
+## Layout
 
 ```
 crates/rules-hub/   the hub: routes, engine method list, adapters, on appkit (see below)
 ui/                 the browser interface (Svelte 5, Vite, TypeScript)
-e2e/                browser tests against the real binary and the real engine, with a synthetic rule set
+e2e/                (later) browser tests against the real binary and the real engine, with a synthetic rule set
 src-tauri/          the native shell (later)
-docs/               usage, security, releasing
+docs/               releasing (usage and security later)
 engine.lock         the rules.nvim and lib.nvim commits this is built and tested against
 ```
 
@@ -62,8 +62,9 @@ The server guard, sessions, pairing, limits and the login entry come from
 [appkit](https://github.com/StefanBartl/appkit), the kit tasks-desktop is built on too. It is a git dependency pinned
 by its tag in `Cargo.toml`, and the page takes the kit's browser part, `appkit-ui` (design tokens, base rules, menu bar,
 markdown reader and more), from the same tag in `ui/package.json`. `tools/check-appkit-pin.py` checks that both lock
-files hold one tag and one commit and that the tag still names it; `tools/check-color-literals.py` keeps every colour of
-the page a token of the kit.
+files hold one tag and one commit and that the tag still names it; `tools/check-color-literals.py` refuses a hex colour or
+colour function where the CSS of the page states a colour (declarations, style attributes and directives, SVG paint
+attributes), so those colours are tokens of the kit; scripts, `.ts` and `.svg` files and named colours are not looked at.
 The hub already starts on it and passes the kit's security matrix (`crates/rules-hub/tests/security.rs`); it has its
 own names (config folder `rules-desktop`, program `rules-hub`, port 17616, routes under `/api/rules/`) and one route
 behind a session, `about`. Its commands and views come with the read-only UI phase.

@@ -111,33 +111,69 @@ async fn about_names_the_app_to_a_session_and_to_nobody_else() {
     assert_eq!(r.json()["version"], rules_hub::version());
 }
 
+/// The names of the tasks hub (`tasks_hub::IDENTITY` in tasks-desktop), copied: tasks-hub is not a
+/// dependency here, and the two hubs run on one machine side by side.
+const TASKS_IDENTITY: AppIdentity = AppIdentity {
+    app: "tasks-desktop",
+    binary: "tasks-hub",
+    env_prefix: "TASKS_DESKTOP",
+    title: "Tasks",
+    default_port: 17615,
+    route_ns: "tasks",
+};
+
 /// Every name that lands on the disk, in the registry or in the environment of a person.
 fn names(id: &AppIdentity) -> Vec<(&'static str, String)> {
     vec![
         ("app", id.app.to_owned()),
         ("program file", id.program_file()),
         ("config dir variable", id.var("CONFIG_DIR")),
+        ("install dir variable", id.var("INSTALL_DIR")),
         ("port variable", id.var("PORT")),
+        ("no-login-sync variable", id.var("NO_LOGIN_SYNC")),
         ("desktop file", id.desktop_file()),
+        ("agent file", id.agent_file()),
         ("agent label", id.agent_label()),
         ("route of hello", id.route("hello")),
         ("default port", id.default_port.to_string()),
     ]
 }
 
+/// The name of the first name two identities share, if any.
+fn shared_name(a: &AppIdentity, b: &AppIdentity) -> Option<String> {
+    names(a)
+        .into_iter()
+        .zip(names(b))
+        .find(|((_, x), (_, y))| x == y)
+        .map(|((what, x), _)| format!("{what}: {x}"))
+}
+
 #[test]
 fn no_name_of_the_rules_hub_is_a_name_of_another_app() {
-    let ours = names(&rules_hub::IDENTITY);
-    for (what, x) in &ours {
-        let theirs = names(&DEMO_IDENTITY);
-        let (_, y) = theirs.iter().find(|(w, _)| w == what).unwrap();
-        assert_ne!(x, y, "{what} is the same as the demo app's: {x}");
+    // The app's config folder, install folder and login entry, its variables and its port: a hub
+    // that shared one of them with another would write over that one's files or settings.
+    for (other, theirs) in [
+        ("the demo app", &DEMO_IDENTITY),
+        ("tasks-hub", &TASKS_IDENTITY),
+    ] {
+        assert_eq!(
+            shared_name(&rules_hub::IDENTITY, theirs),
+            None,
+            "a name the same as {other}'s"
+        );
     }
-    // The tasks hub is not a dependency here; its port is the one name two hubs on one machine
-    // would fight over.
-    assert_ne!(
-        rules_hub::IDENTITY.default_port,
-        17615,
-        "the port of tasks-hub"
+}
+
+#[test]
+fn a_copy_of_the_names_of_tasks_hub_is_caught() {
+    // The likely slip: the identity of tasks-hub taken over with only the port changed.
+    let copied = AppIdentity {
+        default_port: 17699,
+        ..TASKS_IDENTITY
+    };
+    assert_eq!(
+        shared_name(&copied, &TASKS_IDENTITY),
+        Some("app: tasks-desktop".to_owned())
     );
+    assert_eq!(shared_name(&rules_hub::IDENTITY, &copied), None);
 }
