@@ -11,11 +11,13 @@ use appkit_core::authn::{ManualClock, Secret, CODE_BYTES, TOKEN_BYTES};
 use appkit_hub::engine::{CallFuture, Engine, EngineError, EngineRefusal, Method, Reply};
 use appkit_hub::{HubStatus, Limits, RunningServer};
 use rules_hub::sources::{Class, SourcePolicy};
+use rules_hub::Watch;
 use serde_json::{json, Value};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 mod common;
 
-use common::{get, get_with, session};
+use common::{get, get_with, post, session};
 
 const HELLO: &str = include_str!("fixtures/golden/hello.json");
 const SNAPSHOT: &str = include_str!("fixtures/golden/snapshot.json");
@@ -121,13 +123,14 @@ fn ready() -> HubStatus {
 }
 
 async fn start_with(engine: Option<Arc<FakeEngine>>, max_age: Option<Duration>) -> Hub {
-    start_classified(engine, max_age, Arc::default()).await
+    start_classified(engine, max_age, Arc::default(), None).await
 }
 
 async fn start_classified(
     engine: Option<Arc<FakeEngine>>,
     max_age: Option<Duration>,
     sources: Arc<SourcePolicy>,
+    watch: Option<Watch>,
 ) -> Hub {
     let control = Secret::generate(TOKEN_BYTES).unwrap();
     let server = rules_hub::start(rules_hub::Start {
@@ -151,6 +154,7 @@ async fn start_classified(
         },
         engine: engine.map(|e| e as Arc<dyn Engine>),
         sources,
+        watch,
     })
     .await
     .expect("the hub starts");
@@ -181,6 +185,10 @@ async fn every_route_of_the_table_is_served_to_a_session_and_to_nobody_else() {
     for name in rules_hub::DATA_ROUTES.iter() {
         let without = get(&hub.server, &route(name), None).await;
         assert_eq!(without.status, 401, "{name}: {without:?}");
+        // The stream does not end and the rescan is a POST: both are tried on their own below.
+        if matches!(*name, "events" | "rescan") {
+            continue;
+        }
         let with = hub.get(&route(name)).await;
         // Registered: a route that is not would be a 404 of the router with an empty body.
         assert!(with.status == 200 || with.status == 400, "{name}: {with:?}");
@@ -191,6 +199,8 @@ async fn every_route_of_the_table_is_served_to_a_session_and_to_nobody_else() {
     assert_eq!(seen.get("rule"), Some(&400));
     assert_eq!(seen.get("sources"), Some(&200));
     assert_eq!(seen.get("about"), Some(&200));
+    // `search` without a query is a bad query, told by the route.
+    assert_eq!(seen.get("search"), Some(&400));
 }
 
 #[tokio::test]
@@ -482,7 +492,7 @@ async fn sources_gives_each_file_its_class_and_the_strictest_of_two_keys() {
         ],
         Some(Class::Internal),
     );
-    let hub = start_classified(Some(Arc::clone(&engine)), None, classes).await;
+    let hub = start_classified(Some(Arc::clone(&engine)), None, classes, None).await;
     let r = hub.get(&route("sources")).await;
     assert_eq!(r.status, 200, "{r:?}");
     let doc = r.json();
@@ -539,7 +549,7 @@ async fn the_sources_document_of_the_page_tests_is_what_the_hub_writes() {
         ],
         None,
     );
-    let hub = start_classified(Some(Arc::clone(&engine)), None, classes).await;
+    let hub = start_classified(Some(Arc::clone(&engine)), None, classes, None).await;
     let r = hub.get(&route("sources")).await;
     assert_eq!(r.status, 200, "{r:?}");
     let written: Value = serde_json::from_str(HUB_SOURCES).unwrap();
@@ -557,6 +567,7 @@ async fn a_snapshot_without_its_files_is_no_empty_list() {
         Some(Arc::clone(&engine)),
         None,
         policy(&[], Some(Class::Public)),
+        None,
     )
     .await;
     let r = hub.get(&route("sources")).await;
@@ -579,6 +590,7 @@ async fn a_broken_file_list_costs_the_sources_route_but_not_the_rules() {
         Some(Arc::clone(&engine)),
         None,
         policy(&[], Some(Class::Public)),
+        None,
     )
     .await;
     let r = hub.get(&route("sources")).await;
@@ -609,4 +621,222 @@ fn a_sources_json_with_a_hash_key_does_not_load() {
     )
     .unwrap();
     assert_eq!(SourcePolicy::load(&dir).unwrap().len(), 1);
+}
+
+// The live routes: the event stream, the rescan and the search.
+
+fn quick() -> rules_hub::store::RefreshOptions {
+    rules_hub::store::RefreshOptions {
+        debounce: Duration::from_millis(50),
+        max_wait: Duration::from_millis(300),
+        interval: Duration::from_secs(600),
+    }
+}
+
+/// A folder to watch, shaped like a vault.
+fn watched(name: &str) -> std::path::PathBuf {
+    let dir =
+        std::env::temp_dir().join(format!("rules-desktop-live-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("rulesets").join("alpha")).unwrap();
+    dir
+}
+
+async fn start_watching(engine: &Arc<FakeEngine>, dir: &std::path::Path) -> Hub {
+    start_classified(
+        Some(Arc::clone(engine)),
+        None,
+        Arc::default(),
+        Some(Watch {
+            vault: dir.to_path_buf(),
+            refresh: quick(),
+        }),
+    )
+    .await
+}
+
+/// The golden snapshot with another etag for DEP-01 and another digest: a change.
+fn changed_snapshot() -> String {
+    let mut doc: Value = serde_json::from_str(SNAPSHOT).unwrap();
+    doc["digest"] = json!("sha256:7777777777777777");
+    doc["rev"] = json!("rev:777777");
+    let rules = doc["rules"].as_array_mut().unwrap();
+    let dep = rules.iter_mut().find(|r| r["id"] == "DEP-01").unwrap();
+    dep["etag"] = json!("sha256:1212121212121212");
+    doc.to_string()
+}
+
+/// An open event stream, read as it comes.
+struct Stream {
+    socket: tokio::net::TcpStream,
+    seen: String,
+}
+
+impl Stream {
+    async fn open(hub: &Hub) -> Stream {
+        let mut socket = tokio::net::TcpStream::connect(hub.server.addr())
+            .await
+            .unwrap();
+        let host = format!("127.0.0.1:{}", hub.server.addr().port());
+        let bearer = format!("Bearer {}", hub.token);
+        let bytes = appkit_testkit::wire::request(
+            "GET",
+            &route("events"),
+            &[("Host", host.as_str()), ("Authorization", bearer.as_str())],
+            b"",
+        );
+        socket.write_all(&bytes).await.unwrap();
+        Stream {
+            socket,
+            seen: String::new(),
+        }
+    }
+
+    /// Read until the text holds `needle`; the whole text read so far.
+    async fn until(&mut self, needle: &str) -> String {
+        let end = std::time::Instant::now() + Duration::from_secs(15);
+        while !self.seen.contains(needle) {
+            let left = end.saturating_duration_since(std::time::Instant::now());
+            let mut buf = [0u8; 4096];
+            let n = tokio::time::timeout(left, self.socket.read(&mut buf))
+                .await
+                .unwrap_or_else(|_| panic!("no {needle:?} in {:?}", self.seen))
+                .unwrap();
+            assert!(n > 0, "the stream ended before {needle:?}: {:?}", self.seen);
+            self.seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+        self.seen.clone()
+    }
+}
+
+#[tokio::test]
+async fn the_stream_says_hello_and_then_what_the_watcher_saw() {
+    let engine = FakeEngine::new();
+    let dir = watched("fs");
+    let hub = start_watching(&engine, &dir).await;
+    let mut stream = Stream::open(&hub).await;
+    let hello = stream.until("event: hello").await;
+    assert!(hello.starts_with("HTTP/1.1 200"), "{hello}");
+    assert!(hello.contains("text/event-stream"), "{hello}");
+    stream.until("\n\n").await;
+
+    // A rule file changes on disk, and the engine now says something else about it.
+    *engine.snapshot.lock().unwrap() = changed_snapshot();
+    std::fs::write(dir.join("rulesets/alpha/new.md"), "# x\n").unwrap();
+    let text = stream.until("event: rules").await;
+    assert!(text.contains("DEP-01"), "{text}");
+    assert!(text.contains(r#""cause":"fs""#), "{text}");
+}
+
+#[tokio::test]
+async fn a_file_that_is_no_rule_wakes_nothing() {
+    let engine = FakeEngine::new();
+    let dir = watched("quiet");
+    let hub = start_watching(&engine, &dir).await;
+    let mut stream = Stream::open(&hub).await;
+    stream.until("event: hello").await;
+    let before = engine.count("snapshot");
+    *engine.snapshot.lock().unwrap() = changed_snapshot();
+    std::fs::write(dir.join("README.md"), "x").unwrap();
+    std::fs::write(dir.join("rulesets/alpha/.new.md.swp"), "x").unwrap();
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert_eq!(engine.count("snapshot"), before, "a scan was woken");
+    assert!(!stream.seen.contains("event: rules"), "{}", stream.seen);
+}
+
+#[tokio::test]
+async fn a_rescan_is_accepted_and_the_stream_tells_what_it_found() {
+    let engine = FakeEngine::new();
+    let dir = watched("rescan");
+    let hub = start_watching(&engine, &dir).await;
+    let mut stream = Stream::open(&hub).await;
+    stream.until("event: hello").await;
+
+    let anonymous = post(&hub.server, &route("rescan"), None, "{}").await;
+    assert_eq!(anonymous.status, 401, "{anonymous:?}");
+
+    *engine.snapshot.lock().unwrap() = changed_snapshot();
+    let r = post(&hub.server, &route("rescan"), Some(&hub.token), "{}").await;
+    assert_eq!(r.status, 202, "{r:?}");
+    let text = stream.until("event: rules").await;
+    assert!(text.contains(r#""cause":"rescan""#), "{text}");
+}
+
+#[tokio::test]
+async fn a_session_has_a_few_streams_and_no_more() {
+    let engine = FakeEngine::new();
+    let hub = start(&engine).await;
+    let mut open = Vec::new();
+    for _ in 0..4 {
+        let mut s = Stream::open(&hub).await;
+        s.until("event: hello").await;
+        open.push(s);
+    }
+    let mut fifth = Stream::open(&hub).await;
+    let said = fifth.until("\r\n\r\n").await;
+    assert!(said.starts_with("HTTP/1.1 429"), "{said}");
+}
+
+#[tokio::test]
+async fn without_an_engine_there_is_no_stream_no_search_and_no_rescan() {
+    let hub = start_with(None, None).await;
+    for name in ["events", "search"] {
+        let path = if name == "search" {
+            format!("{}?q=text", route(name))
+        } else {
+            route(name)
+        };
+        let r = hub.get(&path).await;
+        assert_eq!(r.status, 503, "{name}: {r:?}");
+    }
+    let r = post(&hub.server, &route("rescan"), Some(&hub.token), "{}").await;
+    assert_eq!(r.status, 503, "{r:?}");
+}
+
+#[tokio::test]
+async fn the_search_finds_the_rules_whose_title_or_text_hold_the_words() {
+    let engine = FakeEngine::new();
+    let hub = start(&engine).await;
+    let path = format!("{}?q=text%20of", route("search"));
+    let mut answer = Value::Null;
+    for _ in 0..100 {
+        let r = hub.get(&path).await;
+        assert_eq!(r.status, 200, "{r:?}");
+        answer = r.json();
+        if answer["status"] == "ready" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(answer["kind"], "hub.search");
+    assert_eq!(answer["status"], "ready", "{answer}");
+    // The fake knows the text of DEP-01 only ("Text of one."); the other rules are not found by
+    // the engine and are left out of the index.
+    let ids: Vec<&str> = answer["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["DEP-01"], "{answer}");
+    assert!(answer["hits"][0]["snippet"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("Text of one"));
+    // The title counts, too.
+    let by_title = hub.get(&format!("{}?q=one", route("search"))).await.json();
+    assert_eq!(by_title["hits"][0]["id"], "DEP-01");
+    // `bodies` is not a route: the kit's call is the hub's own.
+    let r = hub.get(&route("bodies")).await;
+    assert_eq!(r.status, 404, "{r:?}");
+}
+
+#[tokio::test]
+async fn a_bad_search_is_refused_before_the_index_is_asked() {
+    let engine = FakeEngine::new();
+    let hub = start(&engine).await;
+    for bad in ["", "?q=", "?q=a", "?x=1", "?q=text&q=more", "?q=%ZZ"] {
+        let r = hub.get(&format!("{}{bad}", route("search"))).await;
+        assert_eq!(r.status, 400, "{bad:?}: {r:?}");
+    }
 }

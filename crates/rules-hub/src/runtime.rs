@@ -1,7 +1,8 @@
 //! What the hub keeps while it runs: the status `hello` reports, the engine, the snapshot and the
 //! data classes of this device.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -9,10 +10,15 @@ use appkit_hub::{HubStatus, Runtime};
 use axum::body::Bytes;
 use serde::Deserialize;
 use serde_json::Value;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
-use crate::engine::Engine;
+use crate::bodies::BodiesEngine;
+use crate::engine::{Calls, Engine};
 use crate::sources::{SourceFile, SourcePolicy};
-use crate::store::{Cached, SnapshotStore, StoreOptions, SHAPE};
+use crate::store::{self, Cached, RefreshOptions, SnapshotStore, StoreOptions, SHAPE};
+use crate::watch::{self, Hint, Watcher};
+use appkit_hub::search::{self, SearchIndex};
 
 /// What the hub keeps for the vault it reads.
 pub struct RulesRuntime {
@@ -23,6 +29,67 @@ pub struct RulesRuntime {
     pub(crate) sources: Arc<SourcePolicy>,
     /// What was read of the held snapshot, with the text it was read from.
     held: Mutex<Option<(Bytes, Arc<Held>)>>,
+    /// The text of the rules, for the search; with the engine only.
+    pub(crate) search: Option<Arc<SearchIndex>>,
+    /// The event streams that are open, by session token.
+    pub(crate) streams: Arc<StreamCounter>,
+    /// The indexer and the refresher; they end with the runtime.
+    jobs: Mutex<Vec<JoinHandle<()>>>,
+    // Kept alive: the refresher ends when every sender of hints is gone.
+    _hints: Option<mpsc::UnboundedSender<Hint>>,
+    _watcher: Option<Watcher>,
+}
+
+/// What the hub watches: the vault, and how often it scans.
+pub struct Watch {
+    pub vault: PathBuf,
+    pub refresh: RefreshOptions,
+}
+
+/// The event streams that are open, by session token.
+#[derive(Default)]
+pub(crate) struct StreamCounter {
+    by_token: Mutex<HashMap<String, usize>>,
+}
+
+/// One open stream; the place is given back when it is dropped.
+pub(crate) struct StreamGuard {
+    counter: Arc<StreamCounter>,
+    token: String,
+}
+
+impl StreamCounter {
+    pub(crate) fn acquire(self: &Arc<Self>, token: &str, max: usize) -> Option<StreamGuard> {
+        let mut map = self
+            .by_token
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let open = map.entry(token.to_owned()).or_insert(0);
+        if *open >= max {
+            return None;
+        }
+        *open += 1;
+        Some(StreamGuard {
+            counter: Arc::clone(self),
+            token: token.to_owned(),
+        })
+    }
+}
+
+impl Drop for StreamGuard {
+    fn drop(&mut self) {
+        let mut map = self
+            .counter
+            .by_token
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(open) = map.get_mut(&self.token) {
+            *open = open.saturating_sub(1);
+            if *open == 0 {
+                map.remove(&self.token);
+            }
+        }
+    }
 }
 
 /// What the routes read of a snapshot: the ids of its rules and its files.
@@ -42,7 +109,15 @@ impl Runtime for RulesRuntime {
         &self.status
     }
 
-    fn stop(&self) {}
+    fn stop(&self) {
+        self.stop_jobs();
+    }
+}
+
+impl Drop for RulesRuntime {
+    fn drop(&mut self) {
+        self.stop_jobs();
+    }
 }
 
 /// A snapshot read for the ids of its rules and its files, and nothing else.
@@ -65,6 +140,7 @@ impl RulesRuntime {
         status: HubStatus,
         sources: Arc<SourcePolicy>,
         max_age: Option<Duration>,
+        watch: Option<Watch>,
     ) -> Self {
         let store = SnapshotStore::new(
             engine.clone(),
@@ -74,12 +150,52 @@ impl RulesRuntime {
                 ..StoreOptions::default()
             },
         );
+        // The text of the rules, for the search: asked of the engine rule by rule.
+        let search = engine
+            .clone()
+            .map(|engine| SearchIndex::new(Arc::new(BodiesEngine::new(engine)), Calls::Bodies));
+        let mut jobs = Vec::new();
+        if let Some(index) = &search {
+            jobs.push(search::spawn_indexer(Arc::clone(index), &store));
+        }
+        // The watcher only says "look again"; the refresher does the looking.
+        let (mut hints, mut watcher) = (None, None);
+        if let Some(watch) = watch.filter(|_| engine.is_some()) {
+            let (tx, rx) = mpsc::unbounded_channel();
+            match watch::start(&watch.vault, tx.clone()) {
+                Ok(started) => watcher = Some(started),
+                // Not fatal: the timer and the rescan request still work.
+                Err(e) => {
+                    eprintln!("note: the vault cannot be watched ({e}); scanning on a timer only");
+                }
+            }
+            jobs.push(store::spawn_refresher(
+                Arc::clone(&store),
+                rx,
+                watch.refresh,
+            ));
+            hints = Some(tx);
+        }
         Self {
             status,
             engine,
             store,
             sources,
             held: Mutex::new(None),
+            search,
+            streams: Arc::default(),
+            jobs: Mutex::new(jobs),
+            _hints: hints,
+            _watcher: watcher,
+        }
+    }
+
+    /// Stop the refresher and the indexer.
+    fn stop_jobs(&self) {
+        if let Ok(mut jobs) = self.jobs.lock() {
+            for job in jobs.drain(..) {
+                job.abort();
+            }
         }
     }
 
@@ -138,7 +254,7 @@ mod tests {
             problem: None,
             capabilities: Vec::new(),
         };
-        RulesRuntime::new(None, status, Arc::new(policy), None)
+        RulesRuntime::new(None, status, Arc::new(policy), None, None)
     }
 
     #[test]

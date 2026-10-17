@@ -33,6 +33,7 @@ impl Subject for Rules {
             status: cfg.status,
             engine: None,
             sources: Arc::default(),
+            watch: None,
         }))
     }
 

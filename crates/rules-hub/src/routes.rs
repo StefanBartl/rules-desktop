@@ -12,12 +12,13 @@ use axum::extract::{RawQuery, State};
 use axum::http::header::{self, HeaderMap};
 use axum::http::StatusCode;
 use axum::response::Response;
-use axum::routing::{get, MethodRouter};
+use axum::routing::{get, post, MethodRouter};
 use axum::Router;
 use serde_json::{json, Value};
 
 use crate::answer::{ask, engine_failure, engine_unavailable};
 use crate::engine::{Calls, EngineError};
+use crate::live;
 use crate::runtime::RulesRuntime;
 use crate::IDENTITY;
 
@@ -33,6 +34,9 @@ pub const ROUTES: &[(&str, MakeRoute)] = &[
     ("rule", || get(rule)),
     ("sources", || get(sources)),
     ("about", || get(about)),
+    ("events", || get(live::events)),
+    ("search", || get(live::search)),
+    ("rescan", || post(live::rescan)),
 ];
 
 /// The router of the app, built from [`ROUTES`] and from nothing else. Invariant: this stays a
@@ -273,7 +277,10 @@ mod tests {
             assert!(IDENTITY.route(name).starts_with("/api/rules/"), "{name}");
             assert_eq!(names.iter().filter(|n| *n == name).count(), 1, "{name}");
         }
-        assert_eq!(names, ["snapshot", "rule", "sources", "about"]);
+        assert_eq!(
+            names,
+            ["snapshot", "rule", "sources", "about", "events", "search", "rescan"]
+        );
     }
 
     #[test]

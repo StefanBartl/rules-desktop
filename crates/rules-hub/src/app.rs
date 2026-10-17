@@ -16,7 +16,8 @@ use serde_json::Value;
 
 use crate::engine::{cli_config, probe, CliEngine, Engine, DISCOVERY};
 use crate::sources::SourcePolicy;
-use crate::{client, Start, IDENTITY};
+use crate::store::RefreshOptions;
+use crate::{client, Start, Watch, IDENTITY};
 
 /// What to do when the hub is started.
 #[derive(Debug, Clone, Default)]
@@ -87,6 +88,8 @@ pub struct EngineState {
     /// A longer text for the terminal of whoever started the hub (it may hold paths; `hello` gets
     /// only the short code of `status`).
     pub note: Option<String>,
+    /// The vault to watch, once the engine is known to be there.
+    pub vault: Option<PathBuf>,
 }
 
 /// Find Neovim, the engine and the vault, start the engine and ask it `hello`.
@@ -99,6 +102,7 @@ pub async fn engine_state(file: &FileConfig<NoSettings>, env: &Env) -> EngineSta
         },
         engine: None,
         note: Some(note),
+        vault: None,
     };
     let inputs = AppInputs {
         lib_dir: None,
@@ -127,6 +131,7 @@ pub async fn engine_state(file: &FileConfig<NoSettings>, env: &Env) -> EngineSta
                 capabilities: info.capabilities,
             },
             engine: Some(Arc::new(engine)),
+            vault: Some(setup.vault.value.clone()),
             note: setup
                 .lib_problem
                 .as_ref()
@@ -186,6 +191,10 @@ pub async fn serve(opts: ServeOptions) -> Result<(), String> {
         status: status.clone(),
         engine: state.engine.clone(),
         sources: Arc::clone(&sources),
+        watch: state.vault.clone().map(|vault| Watch {
+            vault,
+            refresh: RefreshOptions::default(),
+        }),
     };
     // The port is part of the origin, so the wanted one is tried first. When it is taken the server
     // still starts, on another port, and says so.

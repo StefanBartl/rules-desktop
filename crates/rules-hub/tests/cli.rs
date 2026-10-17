@@ -376,3 +376,138 @@ fn a_port_below_1024_in_config_json_stops_the_start() {
     assert_eq!(out.status.code(), Some(1));
     assert!(text(&out.stderr).contains("1024"), "{}", text(&out.stderr));
 }
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+async fn post_json(running: &Running, token: &str, path: &str) -> u16 {
+    let auth = format!("Bearer {token}");
+    let origin = format!("http://127.0.0.1:{}", running.port);
+    client::request(
+        running.port,
+        "POST",
+        path,
+        &[
+            ("Authorization", &auth),
+            ("Origin", &origin),
+            ("Content-Type", "application/json"),
+        ],
+        "{}",
+    )
+    .await
+    .expect("request")
+    .status
+}
+
+/// Ask until `done` likes the answer; the last answer when it never does within the time.
+async fn until(running: &Running, token: &str, path: &str, done: impl Fn(&Value) -> bool) -> Value {
+    let end = Instant::now() + Duration::from_secs(30);
+    loop {
+        let (_, doc) = get(running, token, path).await;
+        if done(&doc) || Instant::now() > end {
+            return doc;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+fn has_rule(snapshot: &Value, id: &str) -> bool {
+    snapshot["rules"]
+        .as_array()
+        .is_some_and(|rules| rules.iter().any(|r| r["id"] == id))
+}
+
+#[tokio::test]
+async fn the_search_reads_the_texts_through_the_real_engine() {
+    let hub = serve("search", Some(CLASSES));
+    let token = token(&hub).await;
+    let doc = until(&hub, &token, "/api/rules/search?q=never%20dropped", |d| {
+        d["status"] == "ready"
+    })
+    .await;
+    assert_eq!(doc["status"], "ready", "{doc}");
+    assert_eq!(doc["indexed"], 6, "{doc}");
+    let ids: Vec<&str> = doc["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["AA-01"], "{doc}");
+    // The text is a text: the markup in the rule is what the snippet shows, character for character.
+    let markup = get(&hub, &token, "/api/rules/search?q=Not%20markup")
+        .await
+        .1;
+    let snippet = markup["hits"][0]["snippet"]["text"].as_str().unwrap();
+    assert!(snippet.contains("<b>Not markup</b>"), "{markup}");
+}
+
+#[tokio::test]
+async fn a_new_rule_file_shows_up_by_itself_and_a_rescan_is_accepted() {
+    let vault =
+        std::env::temp_dir().join(format!("rules-desktop-live-vault-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&vault);
+    copy_dir(&fixture_vault(), &vault);
+    let dir = config_dir("live", Some(CLASSES));
+    std::fs::write(
+        dir.join("config.json"),
+        serde_json::json!({ "vault": vault }).to_string(),
+    )
+    .unwrap();
+    let hub = serve_in(dir);
+    let token = token(&hub).await;
+    let snapshot = get(&hub, &token, "/api/rules/snapshot").await.1;
+    assert!(!has_rule(&snapshot, "AA-04"));
+
+    let rule = |id: &str, word: &str| {
+        format!(
+            "# More\n\n#### `{id}` - {word}\n\n```rule\nid = \"{id}\",\nseverity = \"recommended\",\n```\n\nThe word is {word}.\n"
+        )
+    };
+    // The engine does not trust a file younger than two seconds: wait it out before each write.
+    std::thread::sleep(Duration::from_millis(2200));
+    std::fs::write(
+        vault.join("rulesets/alpha/regeln/more.md"),
+        rule("AA-04", "zebra"),
+    )
+    .unwrap();
+    // By itself: the watcher saw the file, the refresher read the snapshot again.
+    let snapshot = until(&hub, &token, "/api/rules/snapshot", |d| {
+        has_rule(d, "AA-04")
+    })
+    .await;
+    assert!(
+        has_rule(&snapshot, "AA-04"),
+        "the watcher did not see the file"
+    );
+    // The index follows: the new text is found.
+    let found = until(&hub, &token, "/api/rules/search?q=zebra", |d| {
+        d["total"].as_u64() == Some(1)
+    })
+    .await;
+    assert_eq!(found["hits"][0]["id"], "AA-04", "{found}");
+
+    // And a rescan is accepted (that it is what reads the snapshot is tested with the fake engine, where no watcher runs).
+    std::thread::sleep(Duration::from_millis(2200));
+    std::fs::write(
+        vault.join("rulesets/beta/regeln/more.md"),
+        rule("BB-03", "okapi"),
+    )
+    .unwrap();
+    assert_eq!(post_json(&hub, &token, "/api/rules/rescan").await, 202);
+    let snapshot = until(&hub, &token, "/api/rules/snapshot", |d| {
+        has_rule(d, "BB-03")
+    })
+    .await;
+    assert!(has_rule(&snapshot, "BB-03"));
+    let _ = std::fs::remove_dir_all(&vault);
+}

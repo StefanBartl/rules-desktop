@@ -16,14 +16,17 @@ use appkit_hub::{serve, GuardRules, HubStatus, Limits, Page, Pages, RunningServe
 mod answer;
 pub mod app;
 pub mod background;
+pub mod bodies;
 pub mod engine;
+mod live;
 mod routes;
 mod runtime;
 pub mod sources;
 pub mod store;
+pub mod watch;
 
 pub use routes::{MakeRoute, Shared, MAX_ID_BYTES, ROUTES};
-pub use runtime::RulesRuntime;
+pub use runtime::{RulesRuntime, Watch};
 
 pub use appkit_hub::{client, loginitems};
 
@@ -93,6 +96,9 @@ pub struct Start {
     /// it starts the hub and must not start it when that fails (`app::serve` stops the start).
     /// The default classifies nothing.
     pub sources: Arc<SourcePolicy>,
+    /// The vault to watch for changes, with the timings of the scan. `None`: nothing is watched,
+    /// the snapshot changes when a client asks for a rescan or it is too old.
+    pub watch: Option<Watch>,
 }
 
 /// Starts the hub.
@@ -114,7 +120,7 @@ pub async fn start(s: Start) -> std::io::Result<RunningServer> {
             version: version(),
             guard_rules: GuardRules::new(IDENTITY.route("hello"), []),
             ui: Arc::new(NoPages),
-            runtime: RulesRuntime::new(s.engine, s.status, s.sources, max_age),
+            runtime: RulesRuntime::new(s.engine, s.status, s.sources, max_age, s.watch),
             // There is one vault and no list to choose from, so this is never called.
             build: Arc::new(move |()| {
                 RulesRuntime::new(
@@ -126,6 +132,7 @@ pub async fn start(s: Start) -> std::io::Result<RunningServer> {
                     },
                     Arc::default(),
                     max_age,
+                    None,
                 )
             }),
             vaults: None,
