@@ -19,3 +19,6 @@ Thumbs.db
 .claude/
 __pycache__/
 *.pyc
+
+ui/test-results/
+ui/playwright-report/

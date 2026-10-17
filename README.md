@@ -5,8 +5,10 @@ browse the rules, search them, and later create, change, retire and move them, i
 native app after that. The sibling of [tasks-desktop](https://github.com/StefanBartl/tasks-desktop), built on the same
 parts and meant to look and behave like it.
 
-**Status: early development. Nothing is released.** The hub starts on the shared kit and passes its security matrix,
-and the page loads the kit's tokens; the rule views and commands follow the phases below. Do not expect a download.
+**Status: early development. Nothing is released.** The read-only interface works: the hub serves families, rules,
+search, findings and the rule detail, follows the rule files live and passes its security matrix, axe and a corpus of
+hostile rules in the browser. Writing rules and the native shell follow the phases below. Do not expect a download. How to
+use it: [docs/USAGE.md](docs/USAGE.md); what it does about security: [docs/SECURITY.md](docs/SECURITY.md).
 
 ## What it is for
 
@@ -50,9 +52,9 @@ The planning notes live outside this repository, in the maintainer's task vault.
 ```
 crates/rules-hub/   the hub: routes, engine method list, adapters, on appkit (see below)
 ui/                 the browser interface (Svelte 5, Vite, TypeScript)
-e2e/                (later) browser tests against the real binary and the real engine, with a synthetic rule set
+ui/e2e/             browser tests (Playwright, axe) against the real binary and the real engine, with a synthetic rule set
 src-tauri/          the native shell (later)
-docs/               releasing (usage and security later)
+docs/               usage, security, releasing
 engine.lock         the rules.nvim and lib.nvim commits this is built and tested against
 ```
 

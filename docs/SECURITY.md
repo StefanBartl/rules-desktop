@@ -1,0 +1,35 @@
+# Security of the local server
+
+`rules-hub` is a web server on your own machine. Anything on the machine, and any web page you open in a browser, can try
+to talk to it. The guard, the pairing, the sessions, the limits and the engine seam are those of
+[appkit](https://github.com/StefanBartl/appkit): **its `SECURITY.md` is the description of what holds for every app, and
+its security matrix (`appkit-testkit`, `security_matrix!`) is the shared test of it.** This hub runs that matrix
+(`crates/rules-hub/tests/security.rs`): every route of `ROUTES` is a data route, and the matrix tries each one without a
+session. This page says what is the rules hub's own.
+
+## What is the rules hub's own
+
+| Thing | What holds | Where it is tested |
+| --- | --- | --- |
+| Names | App, program, variables, port, routes and login entry are the hub's own and share none with `tasks-hub` or the demo app. | `tests/security.rs` (`no_name_of_the_rules_hub_is_a_name_of_another_app`) |
+| Data routes | `snapshot`, `rule`, `sources`, `about`, `events`, `search`, `rescan`, `open` all need a session; a route added to `ROUTES` is a data route by construction. | matrix; `tests/routes.rs` |
+| The engine only reads | The table of calls has no write call (`ops` is not in it); the page cannot name a call: `bodies` (the search's own question) is not a route. | `src/engine.rs` tests; `tests/routes.rs` |
+| No string from outside reaches the engine | `rule` and `open` take an id; an id that is not in the held snapshot is a 404 without a question to the engine. | `tests/routes.rs` |
+| A rule set is code | The hub never runs a rule's `check`; the page shows it as JSON in a `<pre>`. | `e2e/app.spec.ts` |
+| Rule text is text | Titles, texts, checks and sources are shown as text; hidden and bidi characters are made visible (`⟦U+202E⟧`). | `e2e/app.spec.ts` (a corpus of hostile rules: markup, script, `javascript:` links, event handlers, bidi) |
+| Data classes fail closed | An unclassified rule set is marked, never released; an unreadable `sources.json` stops the start. | `src/sources.rs`; `tests/cli.rs` |
+| Opening a file | `open` takes only an id. The file is the `source` the engine names, a plain file below `<vault>/rulesets` after links are resolved; the editor starts with a program and arguments, no shell. | `tests/routes.rs`; `src/editor.rs` |
+| The page's policy | `default-src 'none'`; scripts and styles from `self`; no inline script, no `unsafe-*`, Trusted Types. | `tests/routes.rs`; `e2e/app.spec.ts` |
+| Nothing of a rule set in the browser | The session is in `sessionStorage` of the tab; `localStorage` holds language, theme and the single-key switch. No cookie is ever set. | `e2e/app.spec.ts` |
+| Accessibility | axe reports nothing on every view, the detail and the palette, in the light and the dark scheme. | `e2e/app.spec.ts` |
+
+## What it does not do
+
+- It is not a defence against someone who already runs code as you: they can read `control.secret` and `sources.json`.
+- The search index holds the rule texts in the memory of the hub; they are not written anywhere.
+- It does not run the checks of rules and does not write rules.
+
+## Reporting
+
+A hole in the guard belongs to appkit (see its `SECURITY.md`); one in what this page lists belongs here. Open an issue
+without the details, or write to the maintainer.

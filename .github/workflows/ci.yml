@@ -104,6 +104,55 @@ jobs:
       - run: pnpm build
       - run: pnpm audit --audit-level high
 
+  # The browser tests: the binary, the real engine (a real Neovim and the pinned rules.nvim), the system's Chrome,
+  # axe on every view in both colour schemes, and a corpus of hostile rules.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          persist-credentials: false
+      - name: Read the pinned engine commits
+        id: engine
+        shell: bash
+        run: |
+          echo "commit=$(sed -n 's/^commit *= *//p' engine.lock)" >> "$GITHUB_OUTPUT"
+          echo "lib_commit=$(sed -n 's/^lib_commit *= *//p' engine.lock)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          repository: StefanBartl/rules.nvim
+          ref: ${{ steps.engine.outputs.commit }}
+          path: engine/rules.nvim
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          repository: StefanBartl/lib.nvim
+          ref: ${{ steps.engine.outputs.lib_commit }}
+          path: engine/lib.nvim
+          persist-credentials: false
+      - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1
+        with:
+          neovim: true
+          version: v0.12.2
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - run: npm install --global pnpm@11.28.2
+      - name: Build the page, then the binary that embeds it
+        run: |
+          pnpm --dir ui install --frozen-lockfile
+          pnpm --dir ui build
+          cargo build --locked
+      - name: Browser tests (Playwright, axe, hostile rules)
+        working-directory: ui
+        run: pnpm e2e
+      # A failed browser test leaves its trace (network, DOM, console) to read instead of a guess.
+      - name: Traces of failed browser tests
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (node24)
+        with:
+          name: playwright-traces
+          path: ui/test-results
+          if-no-files-found: ignore
+          retention-days: 14
   # A control or invisible character in a tracked text file is refused; the tool tests itself.
   hygiene:
     runs-on: ubuntu-latest
