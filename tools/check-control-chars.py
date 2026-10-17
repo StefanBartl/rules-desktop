@@ -38,6 +38,9 @@ RANGES = [
     (0x0B, 0x0C),
     (0x0E, 0x1F),
     (0x7F, 0x9F),
+    # The soft hyphen: invisible unless a line breaks there, and the one such character the other
+    # ranges miss; a source file must not carry it (a regex that lists it would change unseen).
+    (0xAD, 0xAD),
     (0x200B, 0x200F),
     (0x2028, 0x2029),
     (0x202A, 0x202E),

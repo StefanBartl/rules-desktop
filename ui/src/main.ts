@@ -1,3 +1,6 @@
+// The tokens and base rules of appkit-ui first: the look every app of appkit shares.
+import 'appkit-ui/tokens.css';
+import 'appkit-ui/base.css';
 import { mount } from 'svelte';
 import App from './App.svelte';
 

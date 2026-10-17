@@ -60,7 +60,10 @@ engine.lock         the rules.nvim and lib.nvim commits this is built and tested
 
 The server guard, sessions, pairing, limits and the login entry come from
 [appkit](https://github.com/StefanBartl/appkit), the kit tasks-desktop is built on too. It is a git dependency pinned
-by its tag in `Cargo.toml`; `tools/check-appkit-pin.py` checks that the tag still names the commit `Cargo.lock` holds.
+by its tag in `Cargo.toml`, and the page takes the kit's browser part, `appkit-ui` (design tokens, base rules, menu bar,
+markdown reader and more), from the same tag in `ui/package.json`. `tools/check-appkit-pin.py` checks that both lock
+files hold one tag and one commit and that the tag still names it; `tools/check-color-literals.py` keeps every colour of
+the page a token of the kit.
 The hub already starts on it and passes the kit's security matrix (`crates/rules-hub/tests/security.rs`); it has its
 own names (config folder `rules-desktop`, program `rules-hub`, port 17616, routes under `/api/rules/`) and one route
 behind a session, `about`. Its commands and views come with the read-only UI phase.

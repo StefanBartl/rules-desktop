@@ -9,9 +9,10 @@ points now.
 
     python tools/check-appkit-pin.py [--lock Cargo.lock]
 
-Exit 0: every appkit package is pinned by a tag, all by the same tag and commit, and the tag names
-that commit. Exit 1: what is wrong is listed. Exit 2: the check itself could not run (git, network);
-that is not a pass.
+Exit 0: every appkit package is pinned by a tag, all by the same tag and commit, the page pins the
+kit's folder (`appkit-ui` in ui/pnpm-lock.yaml) to that same tag and commit, and the tag names that
+commit. Exit 1: what is wrong is listed. Exit 2: the check itself could not run (git, network); that
+is not a pass.
 
 For Cargo.lock what check-lock-age.py is for crates.io: the one git source of the tree.
 """
@@ -56,6 +57,44 @@ def pinned(packages):
     return pins, problems
 
 
+# pnpm writes the specifier as `github:StefanBartl/appkit#v0.3.0&path:ui-kit` (also when it was given as a
+# git+https URL) and the resolved version as the tarball of the commit, `https://codeload.github.com/
+# StefanBartl/appkit/tar.gz/<sha>#path:ui-kit`, with the peers in brackets after it.
+UI_SPECIFIER = re.compile(
+    r"^\s*specifier: (?:github:StefanBartl/appkit|git\+https://github\.com/StefanBartl/appkit(?:\.git)?)"
+    r"#(?P<tag>[^&\s]+)&path:ui-kit\s*$",
+    re.M,
+)
+UI_VERSION = re.compile(
+    r"^\s*version: (?:https://codeload\.github\.com/StefanBartl/appkit/tar\.gz/(?P<sha>[0-9a-f]{40})#path:ui-kit"
+    r"|git\+https://github\.com/StefanBartl/appkit(?:\.git)?#(?P<sha2>[0-9a-f]{40})&path:ui-kit)(?:\([^)]*\))?\s*$",
+    re.M,
+)
+
+
+def ui_pin(lock_text):
+    """The (tag, sha) the page pins the kit's folder to in pnpm-lock.yaml, or the list of what is wrong.
+
+    The page takes `appkit-ui` from the folder `ui-kit` of the same repository, by the same tag as the
+    hub takes the crates; a `link:` to a checkout, a branch or no kit at all is a mistake here.
+    """
+    problems = []
+    block = re.search(r"^\s+appkit-ui:\n(?P<body>(?:\s+\S.*\n){1,3})", lock_text, re.M)
+    if not block:
+        problems.append("the page does not pin appkit-ui (ui/pnpm-lock.yaml has no entry)")
+        return None, problems
+    body = block.group("body")
+    spec = UI_SPECIFIER.search(body)
+    version = UI_VERSION.search(body)
+    if not spec:
+        problems.append(f"appkit-ui: not the folder ui-kit of {APPKIT} by a tag: {body.strip().splitlines()[0]}")
+        return None, problems
+    if not version:
+        problems.append("appkit-ui: pnpm-lock.yaml pins no commit for it")
+        return None, problems
+    return (spec.group("tag"), version.group("sha") or version.group("sha2")), problems
+
+
 def remote_commit(tag):
     """The commit the tag names now: the peeled commit of an annotated tag."""
     refs = [f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"]
@@ -78,6 +117,7 @@ def remote_commit(tag):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--lock", default="Cargo.lock")
+    parser.add_argument("--ui-lock", default="ui/pnpm-lock.yaml")
     args = parser.parse_args()
     with open(args.lock, encoding="utf-8") as f:
         packages = list(appkit_packages(f.read()))
@@ -85,6 +125,12 @@ def main():
         print(f"no package of {APPKIT} in {args.lock}")
         return 1
     pins, problems = pinned(packages)
+    with open(args.ui_lock, encoding="utf-8") as f:
+        ui, ui_problems = ui_pin(f.read())
+    problems.extend(ui_problems)
+    # The page and the hub take one version of the kit: the same tag, and the commit it named for both.
+    if ui is not None and pins and ui not in pins:
+        problems.append(f"the page pins the kit to {ui}, the hub to {sorted(pins)}: one tag for both")
     if problems:
         for problem in problems:
             print(problem)
@@ -102,7 +148,7 @@ def main():
         print(f"the tag {tag} names {now} now, Cargo.lock pins {sha}: the tag was moved")
         return 1
     names = ", ".join(sorted(name for name, _ in packages))
-    print(f"ok: {names} at {tag} = {sha[:12]}")
+    print(f"ok: {names} and appkit-ui at {tag} = {sha[:12]}")
     return 0
 
 

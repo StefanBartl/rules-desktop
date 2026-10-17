@@ -95,3 +95,5 @@ jobs:
           persist-credentials: false
       - run: python3 -m unittest discover tools
       - run: python3 tools/check-control-chars.py
+      # Every colour of the page is a token of appkit-ui (the same check runs in appkit).
+      - run: python3 tools/check-color-literals.py
