@@ -1,21 +1,25 @@
-//! The read routes of the hub against an engine in the process, without Neovim: a fake that answers
+//! The routes of the hub against an engine in the process, without Neovim: a fake that answers
 //! with the golden documents of rules.nvim (`tests/fixtures/golden`, a copy of
 //! `schemas/rules-export/1/golden` at the pinned commit; CI compares the two) and counts what it
 //! was asked.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use appkit_core::authn::{ManualClock, Secret, CODE_BYTES, TOKEN_BYTES};
 use appkit_hub::engine::{CallFuture, Engine, EngineError, EngineRefusal, Method, Reply};
-use appkit_hub::{HubStatus, Limits, RunningServer};
+use appkit_hub::{BoxFuture, HubStatus, Limits, RunningServer};
+use rules_hub::bodies::HostedEngine;
 use rules_hub::sources::{Class, SourcePolicy};
+use rules_hub::store::RefreshOptions;
 use serde_json::{json, Value};
 
 mod common;
 
-use common::{get, get_with, session};
+use common::{get, get_with, post, session, Sse};
 
 const HELLO: &str = include_str!("fixtures/golden/hello.json");
 const SNAPSHOT: &str = include_str!("fixtures/golden/snapshot.json");
@@ -27,12 +31,19 @@ const HUB_SOURCES: &str = include_str!("fixtures/hub/sources.json");
 /// The digest of the golden snapshot: its ETag.
 const SNAPSHOT_DIGEST: &str = "sha256:9609c01610189534";
 
+/// How long a test waits for what the hub does by itself (the first build of the search index
+/// starts two seconds after the hub).
+const WAIT: Duration = Duration::from_secs(15);
+
 /// An engine in the process. It answers `hello` and `snapshot` with the golden documents, `rule`
-/// with the golden rule for its id (`DEP-01`) and a `not_found` refusal for any other, and keeps
-/// every question.
+/// with the golden rule for its id (`DEP-01`), with a rule document made from it for an id that
+/// has a text in `texts`, and with a `not_found` refusal for any other, and keeps every question.
+/// Its host is not running unless a test says so: then the search reads no text.
 struct FakeEngine {
     snapshot: Mutex<String>,
     hello: Mutex<Result<String, ()>>,
+    texts: Mutex<HashMap<String, String>>,
+    host: AtomicBool,
     asked: Mutex<Vec<(&'static str, Option<Value>)>>,
 }
 
@@ -41,8 +52,26 @@ impl FakeEngine {
         Arc::new(Self {
             snapshot: Mutex::new(SNAPSHOT.trim_end().to_owned()),
             hello: Mutex::new(Ok(HELLO.trim_end().to_owned())),
+            texts: Mutex::new(HashMap::new()),
+            host: AtomicBool::new(false),
             asked: Mutex::new(Vec::new()),
         })
+    }
+
+    /// An engine whose host runs and that has a text for every rule of the golden snapshot.
+    fn hosted() -> Arc<Self> {
+        let engine = Self::new();
+        engine.host.store(true, Ordering::SeqCst);
+        let mut texts = engine.texts.lock().unwrap();
+        for (id, text) in [
+            ("DEP-09", "Text of nine: pin every dependency."),
+            ("ERR-100", "Prose of the rule."),
+            ("LUA-01", "Text of the function check."),
+        ] {
+            texts.insert(id.to_owned(), text.to_owned());
+        }
+        drop(texts);
+        engine
     }
 
     fn count(&self, method: &str) -> usize {
@@ -73,6 +102,23 @@ impl FakeEngine {
             text: ERROR.trim_end().to_owned(),
         })
     }
+
+    /// The `rule` document of an id: the golden one, or one made from it with another text.
+    fn rule(&self, id: &str) -> Result<String, EngineError> {
+        if id == "DEP-01" {
+            return Ok(RULE.trim_end().to_owned());
+        }
+        let Some(text) = self.texts.lock().unwrap().get(id).cloned() else {
+            return Err(Self::not_found(id));
+        };
+        let mut doc: Value = serde_json::from_str(RULE).unwrap();
+        doc["rule"]["id"] = json!(id);
+        doc["rule"]["text"] = json!(text);
+        // Of the state the snapshot is.
+        let snapshot: Value = serde_json::from_str(&self.snapshot.lock().unwrap()).unwrap();
+        doc["rev"] = snapshot["rev"].clone();
+        Ok(doc.to_string())
+    }
 }
 
 impl Engine for FakeEngine {
@@ -92,10 +138,7 @@ impl Engine for FakeEngine {
                 "snapshot" => self.snapshot.lock().unwrap().clone(),
                 "rule" => {
                     let id = params.and_then(|p| p["id"].as_str()).unwrap_or_default();
-                    if id != "DEP-01" {
-                        return Err(Self::not_found(id));
-                    }
-                    RULE.trim_end().to_owned()
+                    self.rule(id)?
                 }
                 other => panic!("the fake engine was asked {other}"),
             };
@@ -107,8 +150,15 @@ impl Engine for FakeEngine {
     }
 }
 
+impl HostedEngine for FakeEngine {
+    fn host_running(&self) -> BoxFuture<'_, bool> {
+        Box::pin(async { self.host.load(Ordering::SeqCst) })
+    }
+}
+
 struct Hub {
     server: RunningServer,
+    control: Secret,
     token: String,
 }
 
@@ -120,8 +170,83 @@ fn ready() -> HubStatus {
     }
 }
 
+/// How a test starts the hub.
+struct Rig {
+    engine: Option<Arc<FakeEngine>>,
+    max_age: Option<Duration>,
+    sources: Arc<SourcePolicy>,
+    vault: Option<PathBuf>,
+    heartbeat: Duration,
+    max_sessions: usize,
+}
+
+impl Default for Rig {
+    fn default() -> Self {
+        Self {
+            engine: None,
+            // The snapshot is held until something says it changed: each fetch is one the test
+            // caused.
+            max_age: None,
+            sources: Arc::default(),
+            vault: None,
+            heartbeat: Duration::from_secs(60),
+            max_sessions: Limits::default().max_sessions,
+        }
+    }
+}
+
+impl Rig {
+    async fn start(self) -> Hub {
+        let control = Secret::generate(TOKEN_BYTES).unwrap();
+        let server = rules_hub::start(rules_hub::Start {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            limits: Limits {
+                snapshot_max_age: self.max_age,
+                heartbeat: self.heartbeat,
+                max_sessions: self.max_sessions,
+                ..Limits::default()
+            },
+            clock: Arc::new(ManualClock::new()),
+            pairing_ttl: Duration::from_secs(60),
+            control_secret: control.clone(),
+            instance: Secret::generate(CODE_BYTES).unwrap(),
+            status: if self.engine.is_some() {
+                ready()
+            } else {
+                HubStatus {
+                    engine_ready: false,
+                    problem: Some("engine_not_found"),
+                    capabilities: Vec::new(),
+                }
+            },
+            engine: self.engine.map(|e| e as Arc<dyn HostedEngine>),
+            sources: self.sources,
+            vault: self.vault,
+            refresh: RefreshOptions {
+                debounce: Duration::from_millis(100),
+                max_wait: Duration::from_secs(1),
+                interval: Duration::from_secs(300),
+            },
+        })
+        .await
+        .expect("the hub starts");
+        let token = session(&server, &control).await;
+        Hub {
+            server,
+            control,
+            token,
+        }
+    }
+}
+
 async fn start_with(engine: Option<Arc<FakeEngine>>, max_age: Option<Duration>) -> Hub {
-    start_classified(engine, max_age, Arc::default()).await
+    Rig {
+        engine,
+        max_age,
+        ..Rig::default()
+    }
+    .start()
+    .await
 }
 
 async fn start_classified(
@@ -129,37 +254,17 @@ async fn start_classified(
     max_age: Option<Duration>,
     sources: Arc<SourcePolicy>,
 ) -> Hub {
-    let control = Secret::generate(TOKEN_BYTES).unwrap();
-    let server = rules_hub::start(rules_hub::Start {
-        addr: "127.0.0.1:0".parse().unwrap(),
-        limits: Limits {
-            snapshot_max_age: max_age,
-            ..Limits::default()
-        },
-        clock: Arc::new(ManualClock::new()),
-        pairing_ttl: Duration::from_secs(60),
-        control_secret: control.clone(),
-        instance: Secret::generate(CODE_BYTES).unwrap(),
-        status: if engine.is_some() {
-            ready()
-        } else {
-            HubStatus {
-                engine_ready: false,
-                problem: Some("engine_not_found"),
-                capabilities: Vec::new(),
-            }
-        },
-        engine: engine.map(|e| e as Arc<dyn Engine>),
+    Rig {
+        engine,
+        max_age,
         sources,
-    })
+        ..Rig::default()
+    }
+    .start()
     .await
-    .expect("the hub starts");
-    let token = session(&server, &control).await;
-    Hub { server, token }
 }
 
 async fn start(engine: &Arc<FakeEngine>) -> Hub {
-    // The snapshot is held until something says it changed: each fetch is one the test caused.
     start_with(Some(Arc::clone(engine)), None).await
 }
 
@@ -171,6 +276,18 @@ impl Hub {
     async fn get(&self, path: &str) -> appkit_testkit::wire::Reply {
         get(&self.server, path, Some(&self.token)).await
     }
+
+    async fn post(&self, path: &str) -> appkit_testkit::wire::Reply {
+        post(&self.server, path, Some(&self.token), "{}").await
+    }
+
+    async fn stream(&self) -> Sse {
+        let mut sse = Sse::open(&self.server, Some(&self.token))
+            .await
+            .expect("the stream opens");
+        sse.next_event("hello", WAIT).await.expect("its hello");
+        sse
+    }
 }
 
 #[tokio::test]
@@ -181,15 +298,35 @@ async fn every_route_of_the_table_is_served_to_a_session_and_to_nobody_else() {
     for name in rules_hub::DATA_ROUTES.iter() {
         let without = get(&hub.server, &route(name), None).await;
         assert_eq!(without.status, 401, "{name}: {without:?}");
-        let with = hub.get(&route(name)).await;
+        let status = match *name {
+            // A stream does not end: its first message says it is served.
+            "events" => {
+                assert_eq!(Sse::open(&hub.server, None).await.err(), Some(401));
+                let mut sse = Sse::open(&hub.server, Some(&hub.token)).await.unwrap();
+                assert!(sse.next_event("hello", WAIT).await.is_some());
+                200
+            }
+            "rescan" => {
+                let no_session = post(&hub.server, &route(name), None, "{}").await;
+                assert_eq!(no_session.status, 401, "{no_session:?}");
+                hub.post(&route(name)).await.status
+            }
+            _ => hub.get(&route(name)).await.status,
+        };
         // Registered: a route that is not would be a 404 of the router with an empty body.
-        assert!(with.status == 200 || with.status == 400, "{name}: {with:?}");
-        seen.insert(*name, with.status);
+        assert!(
+            status == 200 || status == 202 || status == 400,
+            "{name}: {status}"
+        );
+        seen.insert(*name, status);
     }
     assert_eq!(seen.get("snapshot"), Some(&200));
-    // `rule` without an id is a bad query, told by the route.
+    // `rule` and `search` without their query are a bad query, told by the route.
     assert_eq!(seen.get("rule"), Some(&400));
+    assert_eq!(seen.get("search"), Some(&400));
     assert_eq!(seen.get("sources"), Some(&200));
+    assert_eq!(seen.get("events"), Some(&200));
+    assert_eq!(seen.get("rescan"), Some(&202));
     assert_eq!(seen.get("about"), Some(&200));
 }
 
@@ -609,4 +746,236 @@ fn a_sources_json_with_a_hash_key_does_not_load() {
     )
     .unwrap();
     assert_eq!(SourcePolicy::load(&dir).unwrap().len(), 1);
+}
+
+/// The golden snapshot after a change: the file of `DEP-01` has a new etag, `DEP-09` is gone.
+fn changed_snapshot(digest: &str) -> String {
+    let mut doc: Value = serde_json::from_str(SNAPSHOT).unwrap();
+    let rules = doc["rules"].as_array_mut().unwrap();
+    rules.retain(|r| r["id"] != "DEP-09");
+    rules[0]["etag"] = json!("sha256:6666666666666666");
+    doc["rev"] = json!("rev:changed");
+    doc["digest"] = json!(digest);
+    doc.to_string()
+}
+
+/// Ask `search` until the index is no longer being built.
+async fn search_when_built(hub: &Hub, query: &str) -> Value {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let r = hub.get(&format!("{}?{query}", route("search"))).await;
+        assert_eq!(r.status, 200, "{r:?}");
+        let doc = r.json();
+        if doc["status"] != "building" {
+            return doc;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the index was not built"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test]
+async fn the_search_finds_the_words_in_the_text_of_the_rules() {
+    let engine = FakeEngine::hosted();
+    let hub = start(&engine).await;
+    let doc = search_when_built(&hub, "q=pin%20Dependency&limit=10").await;
+    assert_eq!(doc["kind"], "hub.search");
+    assert_eq!(doc["status"], "ready", "{doc}");
+    assert_eq!(doc["indexed"], 4);
+    assert_eq!(doc["partial"], false);
+    assert_eq!(doc["total"], 1);
+    assert_eq!(doc["hits"][0]["id"], "DEP-09");
+    let snippet = &doc["hits"][0]["snippet"];
+    assert_eq!(snippet["text"], "Text of nine: pin every dependency.");
+    assert_eq!(snippet["marks"], json!([[14, 17], [24, 34]]));
+
+    // A word in three texts, of which two are asked for.
+    let doc = search_when_built(&hub, "q=text&limit=2").await;
+    assert_eq!(doc["total"], 3, "{doc}");
+    assert_eq!(doc["hits"].as_array().unwrap().len(), 2);
+
+    // The text was read rule by rule; the engine was never asked for `bodies`, and the words
+    // never reached it.
+    assert_eq!(engine.count("bodies"), 0);
+    let mut ids: Vec<String> = engine
+        .params_of("rule")
+        .into_iter()
+        .map(|p| p.unwrap()["id"].as_str().unwrap().to_owned())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, ["DEP-01", "DEP-09", "ERR-100", "LUA-01"]);
+    let asked = format!("{:?}", engine.asked.lock().unwrap());
+    assert!(!asked.contains("ependency"), "{asked}");
+}
+
+#[tokio::test]
+async fn without_a_running_host_the_search_fails_and_no_text_is_asked_for() {
+    let engine = FakeEngine::new();
+    let hub = start(&engine).await;
+    let doc = search_when_built(&hub, "q=text").await;
+    assert_eq!(doc["status"], "failed", "{doc}");
+    assert_eq!(doc["hits"], json!([]));
+    assert_eq!(engine.count("rule"), 0);
+    assert_eq!(engine.count("snapshot"), 0);
+}
+
+#[tokio::test]
+async fn a_search_needs_words_and_an_engine() {
+    let engine = FakeEngine::new();
+    let hub = start(&engine).await;
+    for query in [
+        "",
+        "?q=a",
+        "?q=two%20words&x=1",
+        "?q=a+b",
+        "?q=text&limit=0",
+        "?q=text&limit=51",
+        "?q=text&q=text",
+        "?q=%0Atext",
+    ] {
+        let r = hub.get(&format!("{}{query}", route("search"))).await;
+        assert_eq!(r.status, 400, "{query}: {r:?}");
+        assert_eq!(r.json()["error"]["code"], "bad_query", "{query}");
+    }
+    let hub = start_with(None, None).await;
+    let r = hub.get(&format!("{}?q=text", route("search"))).await;
+    assert_eq!(r.status, 503, "{r:?}");
+    assert_eq!(r.json()["error"]["code"], "engine_unavailable");
+}
+
+#[tokio::test]
+async fn a_stream_says_where_it_starts_and_a_rescan_is_an_event_with_ids_only() {
+    let engine = FakeEngine::new();
+    let hub = start(&engine).await;
+    let mut sse = Sse::open(&hub.server, Some(&hub.token)).await.unwrap();
+    let hello = sse.next_event("hello", WAIT).await.expect("its hello");
+    assert_eq!(hello["rev"], "rev:d62208");
+    assert_eq!(hello["seq"], 0);
+    assert_eq!(hello["instance"], hub.server.instance());
+
+    *engine.snapshot.lock().unwrap() = changed_snapshot("sha256:7777777777777777");
+    let r = hub.post(&route("rescan")).await;
+    assert_eq!(r.status, 202, "{r:?}");
+    let change = sse.next_event("rules", WAIT).await.expect("an event");
+    assert_eq!(change["cause"], "rescan");
+    assert_eq!(change["rev"], "rev:changed");
+    assert_eq!(change["seq"], 1);
+    assert_eq!(change["changed_ids"], json!(["DEP-01"]));
+    assert_eq!(change["added"], json!([]));
+    assert_eq!(change["removed"], json!(["DEP-09"]));
+    assert_eq!(change["truncated"], false);
+    // Ids only: no title, no text, no file.
+    let text = change.to_string();
+    assert!(!text.contains("nine") && !text.contains("DEP.md"), "{text}");
+    // The held snapshot is the new one.
+    let snap = hub.get(&route("snapshot")).await;
+    let tag = format!("{:?}", "sha256:7777777777777777");
+    assert_eq!(snap.header("etag"), Some(tag.as_str()));
+}
+
+#[tokio::test]
+async fn a_stream_takes_no_query_and_without_an_engine_there_is_none() {
+    let engine = FakeEngine::new();
+    let hub = start(&engine).await;
+    let r = hub.get(&format!("{}?since=3", route("events"))).await;
+    assert_eq!(r.status, 400, "{r:?}");
+    let hub = start_with(None, None).await;
+    assert_eq!(
+        Sse::open(&hub.server, Some(&hub.token)).await.err(),
+        Some(503)
+    );
+    let r = hub.post(&route("rescan")).await;
+    assert_eq!(r.status, 503, "{r:?}");
+    assert_eq!(r.json()["error"]["code"], "engine_unavailable");
+}
+
+/// K22: a session that is closed takes its streams with it. The next event does not reach it.
+#[tokio::test]
+async fn a_stream_ends_with_its_session_before_it_is_told_another_id() {
+    let engine = FakeEngine::new();
+    let hub = Rig {
+        engine: Some(Arc::clone(&engine)),
+        max_sessions: 2,
+        ..Rig::default()
+    }
+    .start()
+    .await;
+    let mut old = hub.stream().await;
+    // The session of that stream is the oldest; two newer ones close it.
+    let _second = session(&hub.server, &hub.control).await;
+    let third = session(&hub.server, &hub.control).await;
+    let mut open = Sse::open(&hub.server, Some(&third)).await.unwrap();
+    assert!(open.next_event("hello", WAIT).await.is_some());
+
+    *engine.snapshot.lock().unwrap() = changed_snapshot("sha256:8888888888888888");
+    let r = post(&hub.server, &route("rescan"), Some(&third), "{}").await;
+    assert_eq!(r.status, 202, "{r:?}");
+    // The open session is told.
+    let change = open.next_event("rules", WAIT).await.expect("an event");
+    assert_eq!(change["removed"], json!(["DEP-09"]));
+    // The closed one is not: its stream ends instead.
+    let (ended, seen) = old.ended(WAIT).await;
+    assert!(ended, "the stream outlived its session: {seen:?}");
+    assert!(
+        seen.iter().all(|m| !m.contains("event: rules")),
+        "an id went to a closed session: {seen:?}"
+    );
+}
+
+/// A new folder for a vault of one rule set.
+fn temp_vault(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "rules-hub-routes-{name}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos())
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("rulesets").join("Fixture").join(".rules-ops")).unwrap();
+    std::fs::create_dir_all(dir.join(".git")).unwrap();
+    dir
+}
+
+#[tokio::test]
+async fn a_change_of_a_rule_file_wakes_a_scan_and_a_leftover_does_not() {
+    let engine = FakeEngine::new();
+    let vault = temp_vault("watch");
+    let hub = Rig {
+        engine: Some(Arc::clone(&engine)),
+        vault: Some(vault.clone()),
+        ..Rig::default()
+    }
+    .start()
+    .await;
+    let mut sse = hub.stream().await;
+    let set = vault.join("rulesets").join("Fixture");
+
+    // What tools leave and what the engine keeps for itself wakes nothing.
+    *engine.snapshot.lock().unwrap() = changed_snapshot("sha256:9999999999999999");
+    std::fs::write(set.join("DEP.md~"), "x").unwrap();
+    std::fs::write(set.join(".DEP.md.swp"), "x").unwrap();
+    std::fs::write(set.join("4913"), "x").unwrap();
+    std::fs::write(set.join("notes.txt"), "x").unwrap();
+    std::fs::write(set.join(".rules-ops").join("op.md"), "x").unwrap();
+    std::fs::write(vault.join(".git").join("HEAD"), "x").unwrap();
+    assert!(
+        sse.next_event("rules", Duration::from_millis(1500))
+            .await
+            .is_none(),
+        "a leftover woke a scan"
+    );
+    let before = engine.count("snapshot");
+
+    // A rule file does.
+    std::fs::write(set.join("DEP.md"), "# Dependencies\n").unwrap();
+    let change = sse.next_event("rules", WAIT).await.expect("an event");
+    assert_eq!(change["cause"], "fs");
+    assert_eq!(change["changed_ids"], json!(["DEP-01"]));
+    assert_eq!(engine.count("snapshot"), before + 1, "one scan");
+    drop(hub);
+    let _ = std::fs::remove_dir_all(&vault);
 }

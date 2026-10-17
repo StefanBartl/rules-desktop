@@ -57,12 +57,20 @@ jobs:
       - name: The contract types of the page are those of the pinned engine
         shell: bash
         run: cmp engine/rules.nvim/schemas/rules-export/1/rules-export.d.ts ui/src/lib/contract.d.ts
+      # Neovim for tests/engine.rs, which runs the hub against the pinned engine.
+      - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1
+        with:
+          neovim: true
+          version: v0.12.2
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # A missing engine fails the test against the real engine here instead of skipping it.
       - run: cargo test --workspace --locked
+        env:
+          RULES_DESKTOP_REQUIRE_ENGINE: "1"
 
   # The supply chain: known advisories, licenses, sources, crate age.
   supply-chain:

@@ -68,9 +68,14 @@ attributes), so those colours are tokens of the kit; scripts, `.ts` and `.svg` f
 The hub already starts on it and passes the kit's security matrix (`crates/rules-hub/tests/security.rs`); it has its
 own names (config folder `rules-desktop`, program `rules-hub`, port 17616, routes under `/api/rules/`). Behind a
 session it reads the engine (`rules-export/1`, read only): `snapshot` (the engine's document, its digest as `ETag`),
-`rule?id=` (only an id of the held snapshot is ever passed to the engine) and `about` (the app and the engine's
-version). The tests answer with copies of the engine's golden documents (`crates/rules-hub/tests/fixtures/golden`),
-which CI compares with the pinned engine. Its commands and views come with the rest of the read-only UI phase.
+`rule?id=` (only an id of the held snapshot is ever passed to the engine), `sources` (the data class of each file),
+`search` (the text of the rules, kept by the hub and read through the engine's persistent host only), `events` (a
+stream of the ids that changed, from a watcher of the vault) and `about` (the app and the engine's version). Rule sets
+that `<vault>/.rules.json` names outside the vault are not watched: a change there is seen by the periodic scan while
+a page is open, or when the page gets the focus back. The tests answer with copies of the engine's golden documents
+(`crates/rules-hub/tests/fixtures/golden`), which CI compares with the pinned engine, and one test runs the hub against
+the pinned engine itself on a small fixture vault (`crates/rules-hub/tests/engine.rs`, with Neovim). Its commands and
+views come with the rest of the read-only UI phase.
 
 To try a change of appkit before it has a tag, point the crates at a local checkout in a `.cargo/config.toml` that is
 not committed (`[patch."https://github.com/StefanBartl/appkit"]`). That rewrites `Cargo.lock`: restore it with

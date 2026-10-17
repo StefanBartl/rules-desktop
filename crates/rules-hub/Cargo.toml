@@ -20,9 +20,13 @@ path = "src/lib.rs"
 appkit-core.workspace = true
 appkit-hub.workspace = true
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
+futures-core = "0.3"
+# The stable line of notify, as appkit-hub and tasks-hub take it; 9.0 is a release candidate.
+notify = { version = "8.2", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio = { version = "1", default-features = false, features = ["sync", "rt", "time", "macros"] }
 
 [dev-dependencies]
 appkit-testkit.workspace = true
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }

@@ -394,6 +394,8 @@ dependencies = [
  "appkit-hub",
  "appkit-testkit",
  "axum",
+ "futures-core",
+ "notify",
  "serde",
  "serde_json",
  "tokio",

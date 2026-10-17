@@ -1,28 +1,58 @@
-//! What the hub keeps while it runs: the status `hello` reports, the engine, the snapshot and the
-//! data classes of this device.
+//! What the hub keeps while it runs: the status `hello` reports, the engine, the snapshot, the
+//! search index, the data classes of this device, and the watcher and the jobs that keep the
+//! snapshot and the index fresh.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use appkit_hub::search::{spawn_indexer, SearchIndex};
 use appkit_hub::{HubStatus, Runtime};
 use axum::body::Bytes;
 use serde::Deserialize;
 use serde_json::Value;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
-use crate::engine::Engine;
+use crate::bodies::{BodiesEngine, HostedEngine};
+use crate::engine::{Calls, Engine};
+use crate::events::StreamCounter;
 use crate::sources::{SourceFile, SourcePolicy};
-use crate::store::{Cached, SnapshotStore, StoreOptions, SHAPE};
+use crate::store::{spawn_refresher, Cached, RefreshOptions, SnapshotStore, StoreOptions, SHAPE};
+use crate::watch::{self, Hint};
 
-/// What the hub keeps for the vault it reads.
+/// What the hub keeps for the vault it reads. Dropping it stops the watching and the indexing.
 pub struct RulesRuntime {
     pub(crate) status: HubStatus,
     pub(crate) engine: Option<Arc<dyn Engine>>,
     pub(crate) store: Arc<SnapshotStore>,
+    /// The text of the rules, kept by the hub and read through [`BodiesEngine`]; none without an
+    /// engine.
+    pub(crate) search: Option<Arc<SearchIndex>>,
     /// The data classes of the rule sets on this device (`sources.json`).
     pub(crate) sources: Arc<SourcePolicy>,
+    /// The event streams that are open, by session token.
+    pub(crate) streams: Arc<StreamCounter>,
     /// What was read of the held snapshot, with the text it was read from.
     held: Mutex<Option<(Bytes, Arc<Held>)>>,
+    /// The refresher and the indexer.
+    jobs: Mutex<Vec<JoinHandle<()>>>,
+    // Kept alive: the refresher ends when every sender of hints is gone, and its timer and the
+    // rescan must keep working even when the file watcher could not start.
+    _hints: Option<mpsc::UnboundedSender<Hint>>,
+    _watcher: Option<watch::Watcher>,
+}
+
+/// What a runtime is made from.
+pub(crate) struct Parts {
+    pub(crate) engine: Option<Arc<dyn HostedEngine>>,
+    pub(crate) status: HubStatus,
+    pub(crate) sources: Arc<SourcePolicy>,
+    pub(crate) max_age: Option<Duration>,
+    /// The folder the engine reads (`RULES_VAULT`); watched when it is given.
+    pub(crate) vault: Option<PathBuf>,
+    pub(crate) refresh: RefreshOptions,
 }
 
 /// What the routes read of a snapshot: the ids of its rules and its files.
@@ -42,7 +72,15 @@ impl Runtime for RulesRuntime {
         &self.status
     }
 
-    fn stop(&self) {}
+    fn stop(&self) {
+        RulesRuntime::stop(self);
+    }
+}
+
+impl Drop for RulesRuntime {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 /// A snapshot read for the ids of its rules and its files, and nothing else.
@@ -60,12 +98,19 @@ struct RuleId {
 }
 
 impl RulesRuntime {
-    pub(crate) fn new(
-        engine: Option<Arc<dyn Engine>>,
-        status: HubStatus,
-        sources: Arc<SourcePolicy>,
-        max_age: Option<Duration>,
-    ) -> Self {
+    /// The state of the hub, with its jobs started: with an engine, the refresher (woken by the
+    /// watcher of the vault, its timer and the rescan the page asks for) and the search index;
+    /// without one, nothing runs.
+    pub(crate) fn new(parts: Parts) -> Self {
+        let Parts {
+            engine: hosted,
+            status,
+            sources,
+            max_age,
+            vault,
+            refresh,
+        } = parts;
+        let engine = hosted.clone().map(|e| e as Arc<dyn Engine>);
         let store = SnapshotStore::new(
             engine.clone(),
             SHAPE,
@@ -74,12 +119,54 @@ impl RulesRuntime {
                 ..StoreOptions::default()
             },
         );
+        let search = hosted.map(|hosted| {
+            let bodies: Arc<dyn Engine> = Arc::new(BodiesEngine::new(hosted));
+            SearchIndex::new(bodies, Calls::Bodies)
+        });
+        let mut jobs = Vec::new();
+        let (mut hints, mut watcher) = (None, None);
+        if engine.is_some() {
+            if let Some(index) = &search {
+                jobs.push(spawn_indexer(Arc::clone(index), &store));
+            }
+            // The watcher only says "look again"; the refresher does the looking.
+            let (tx, rx) = mpsc::unbounded_channel();
+            if let Some(vault) = &vault {
+                match watch::start(vault, tx.clone()) {
+                    Ok(started) => watcher = Some(started),
+                    // Not fatal: the timer and the rescan still work.
+                    Err(e) => {
+                        eprintln!(
+                            "note: the vault cannot be watched ({e}); scanning on a timer only"
+                        );
+                    }
+                }
+            }
+            jobs.push(spawn_refresher(Arc::clone(&store), rx, refresh));
+            hints = Some(tx);
+        }
         Self {
             status,
             engine,
             store,
+            search,
             sources,
+            streams: Arc::new(StreamCounter::default()),
             held: Mutex::new(None),
+            jobs: Mutex::new(jobs),
+            _hints: hints,
+            _watcher: watcher,
+        }
+    }
+
+    /// Stop the refresher and the indexer.
+    fn stop(&self) {
+        let mut jobs = self
+            .jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for job in jobs.drain(..) {
+            job.abort();
         }
     }
 
@@ -138,7 +225,14 @@ mod tests {
             problem: None,
             capabilities: Vec::new(),
         };
-        RulesRuntime::new(None, status, Arc::new(policy), None)
+        RulesRuntime::new(Parts {
+            engine: None,
+            status,
+            sources: Arc::new(policy),
+            max_age: None,
+            vault: None,
+            refresh: RefreshOptions::default(),
+        })
     }
 
     #[test]

@@ -7,12 +7,13 @@
 
 use std::sync::Arc;
 
+use appkit_hub::search::{self, Query, Status};
 use appkit_hub::{error_body, etag_matches, json_response, no_query, not_modified, single, Core};
 use axum::extract::{RawQuery, State};
 use axum::http::header::{self, HeaderMap};
 use axum::http::StatusCode;
-use axum::response::Response;
-use axum::routing::{get, MethodRouter};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post, MethodRouter};
 use axum::Router;
 use serde_json::{json, Value};
 
@@ -32,6 +33,9 @@ pub const ROUTES: &[(&str, MakeRoute)] = &[
     ("snapshot", || get(snapshot)),
     ("rule", || get(rule)),
     ("sources", || get(sources)),
+    ("search", || get(search_route)),
+    ("events", || get(crate::events::events)),
+    ("rescan", || post(rescan)),
     ("about", || get(about)),
 ];
 
@@ -194,6 +198,73 @@ async fn sources(State(st): State<Arc<Shared>>, RawQuery(query): RawQuery) -> Re
     json_response(StatusCode::OK, body, None)
 }
 
+/// `GET /api/rules/search?q=<escaped text>&limit=<1..50>`: the rules whose text holds every word,
+/// as the kit's index finds them in the text the hub keeps (`rule.text`, read through
+/// [`crate::bodies::BodiesEngine`]). `status` is `building` until the text was read and `failed`
+/// when it could not be; the page then searches the titles alone. The words of the query are
+/// never passed to the engine.
+async fn search_route(State(st): State<Arc<Shared>>, RawQuery(query): RawQuery) -> Response {
+    let rt = st.rt();
+    let Some(index) = &rt.search else {
+        return engine_unavailable(&rt);
+    };
+    let (text, limit) = match search::parse_request(query.as_deref()) {
+        Ok(parsed) => parsed,
+        Err(why) => return error_body(StatusCode::BAD_REQUEST, "bad_query", why),
+    };
+    let query = match Query::parse(&text) {
+        Ok(q) => q,
+        Err(why) => return error_body(StatusCode::BAD_REQUEST, "bad_query", why),
+    };
+    let (status, indexed, partial, outcome) = match index.status() {
+        Status::Ready { items, partial } => ("ready", items, partial, index.search(&query, limit)),
+        Status::Building => ("building", 0, false, None),
+        Status::Failed => ("failed", 0, false, None),
+    };
+    let hits: Vec<Value> = outcome
+        .as_ref()
+        .map(|o| {
+            o.hits
+                .iter()
+                .map(|h| {
+                    json!({
+                        "id": h.id,
+                        "score": h.score,
+                        "snippet": {
+                            "text": h.snippet.text,
+                            "marks": h.snippet.marks,
+                            "more_before": h.snippet.more_before,
+                            "more_after": h.snippet.more_after,
+                        },
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let body = json!({
+        "schema": 1,
+        "kind": "hub.search",
+        "status": status,
+        "indexed": indexed,
+        "partial": partial,
+        "total": outcome.as_ref().map_or(0, |o| o.total),
+        "hits": hits,
+    });
+    json_response(StatusCode::OK, body.to_string(), None)
+}
+
+/// `POST /api/rules/rescan`: a page that got the focus back asks the hub to look at the rule sets
+/// again (the watcher does not see rule sets outside the vault). Many asks while one scan runs
+/// are one scan; what it finds comes as an event of the stream.
+async fn rescan(State(st): State<Arc<Shared>>) -> Response {
+    let rt = st.rt();
+    if !rt.store.has_engine() {
+        return engine_unavailable(&rt);
+    }
+    rt.store.request_rescan();
+    (StatusCode::ACCEPTED, axum::Json(json!({ "ok": true }))).into_response()
+}
+
 /// `GET /api/rules/about`: what this build is and which engine it runs. Without an engine, or with
 /// one that does not answer, the app is still told.
 async fn about(State(st): State<Arc<Shared>>, RawQuery(query): RawQuery) -> Response {
@@ -273,7 +344,10 @@ mod tests {
             assert!(IDENTITY.route(name).starts_with("/api/rules/"), "{name}");
             assert_eq!(names.iter().filter(|n| *n == name).count(), 1, "{name}");
         }
-        assert_eq!(names, ["snapshot", "rule", "sources", "about"]);
+        assert_eq!(
+            names,
+            ["snapshot", "rule", "sources", "search", "events", "rescan", "about"]
+        );
     }
 
     #[test]

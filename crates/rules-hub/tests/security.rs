@@ -33,6 +33,8 @@ impl Subject for Rules {
             status: cfg.status,
             engine: None,
             sources: Arc::default(),
+            vault: None,
+            refresh: rules_hub::store::RefreshOptions::default(),
         }))
     }
 
