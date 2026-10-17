@@ -27,8 +27,10 @@
 //!   `unclassified`;
 //! - a key may also name the same rule set under its other name (`Checklists` before a second
 //!   `Checklists` is loaded, `wkdbook-Lua/Checklists` after, and back): a key whose last part is
-//!   the first part of `source`, and a one-part key that is its second part, may only make the
-//!   class **stricter**, never looser;
+//!   the first part of `source`, and a key that `source` without its first part is or starts
+//!   with (`Checklists` or the folder `Checklists/_rules` for `wkdbook-Lua/Checklists/_rules/...`),
+//!   may only make the class **stricter**, never looser. Without a default an explicit `private`
+//!   of such a key still counts, a `public` or `internal` one does not;
 //! - a `source` whose first or second part holds a `#` is always `unclassified`, even with a
 //!   default: `#n` follows the order of the configuration and can move from one rule set to
 //!   another. For the same reason a key with `#` is refused, and the hub does not start;
@@ -255,6 +257,16 @@ fn is_under(text: &str, prefix: &str) -> bool {
         && (t.len() == p.len() || t[p.len()] == b'/')
 }
 
+/// Does `new` make a file stricter than `old` without releasing it? An explicit `private` replaces
+/// `unclassified` (both are released for nothing, but the owner said it); `public` or `internal`
+/// never does, since that would release what nobody released.
+fn stricter(new: Shown, old: Shown) -> bool {
+    match old {
+        Shown::Unclassified => new == Shown::Private,
+        _ => new > old,
+    }
+}
+
 impl SourcePolicy {
     /// Build a policy from keys, checking every one.
     ///
@@ -394,20 +406,24 @@ impl SourcePolicy {
             }
         }
         // The keys that may name the same rule set under its other name: only ever stricter.
+        // `rest` is the source without its first part, as it reads once the folder above is no
+        // longer added to the name.
+        let rest = source.split_once('/').map(|(_, r)| r);
         for (key, class) in &self.keys {
             if verdict.matched.contains(&key.as_str()) {
                 continue;
             }
             let last = key.rsplit('/').next().unwrap_or(key);
-            let one_part = !key.contains('/');
-            let alias = last.eq_ignore_ascii_case(first)
-                || (one_part && second.is_some_and(|s| s.eq_ignore_ascii_case(key)));
+            // `wkdbook-Lua/Checklists` for `Checklists/...`; `Checklists` for
+            // `wkdbook-Lua/Checklists/...`, and a folder inside it, `Checklists/_rules`, for
+            // `wkdbook-Lua/Checklists/_rules/...`.
+            let alias = last.eq_ignore_ascii_case(first) || rest.is_some_and(|r| is_under(r, key));
             if !alias {
                 continue;
             }
             verdict.matched.push(key);
             let shown = Shown::from(*class);
-            if shown > verdict.shown {
+            if stricter(shown, verdict.shown) {
                 verdict.shown = shown;
                 verdict.key = Some(key);
             }
@@ -431,8 +447,9 @@ impl SourcePolicy {
                 Shown::Private => private.push(file.path.as_str()),
                 Shown::Public | Shown::Internal => {}
             }
-            for (i, (key, _)) in self.keys.iter().enumerate() {
-                if verdict.matched.contains(&key.as_str()) {
+            // The keys are sorted and unique: each matched one is found, not searched for.
+            for key in &verdict.matched {
+                if let Ok(i) = self.keys.binary_search_by(|(k, _)| k.as_str().cmp(key)) {
                     counts[i] += 1;
                 }
             }
@@ -775,6 +792,50 @@ mod tests {
         // A two-part key names one parent: under another parent its name is no alias.
         let p = policy(&[("other/Checklists", Private)], Some(Public));
         assert_eq!(p.shown("wkdbook-Lua/Checklists/DEP.md"), Shown::Public);
+        // A key of a folder inside the rule set, written while it was alone, keeps that folder
+        // once the rule set is renamed: the default would release it.
+        let p = policy(&[("Checklists/_rules", Private)], Some(Public));
+        assert_eq!(p.shown("Checklists/_rules/ERR/ERR-100.md"), Shown::Private);
+        let v = p.classify("wkdbook-Lua/Checklists/_rules/ERR/ERR-100.md");
+        assert_eq!(v.shown, Shown::Private);
+        assert_eq!(v.key, Some("Checklists/_rules"));
+        assert_eq!(p.shown("wkdbook-Lua/Checklists/DEP.md"), Shown::Public);
+        assert_eq!(
+            p.shown("wkdbook-Lua/Checklists/_rules2/X.md"),
+            Shown::Public
+        );
+        // Still only stricter.
+        let p = policy(&[("Checklists/_rules", Public)], Some(Internal));
+        assert_eq!(
+            p.shown("wkdbook-Lua/Checklists/_rules/ERR/ERR-100.md"),
+            Shown::Internal
+        );
+    }
+
+    #[test]
+    fn without_a_default_an_explicit_private_of_the_other_name_is_kept() {
+        // Nobody said anything about the new name, but the owner marked the rule set private:
+        // it is shown as private, with its key, not as "nobody said".
+        let p = policy(&[("Checklists", Private)], None);
+        let v = p.classify("wkdbook-Lua/Checklists/DEP.md");
+        assert_eq!(v.shown, Shown::Private);
+        assert_eq!(v.key, Some("Checklists"));
+        let p = policy(&[("wkdbook-Lua/Checklists", Private)], None);
+        assert_eq!(p.shown("Checklists/DEP.md"), Shown::Private);
+        let files = [SourceFile {
+            path: "wkdbook-Lua/Checklists/DEP.md".to_owned(),
+            rules: 1,
+        }];
+        let doc = policy(&[("Checklists", Private)], None).document(&files);
+        assert_eq!(doc["private"], json!(["wkdbook-Lua/Checklists/DEP.md"]));
+        assert_eq!(doc["unclassified"], json!([]));
+        // A released class of the other name never replaces "nobody said".
+        for class in [Public, Internal] {
+            let p = policy(&[("Checklists", class)], None);
+            let v = p.classify("wkdbook-Lua/Checklists/DEP.md");
+            assert_eq!(v.shown, Shown::Unclassified, "{class:?}");
+            assert_eq!(v.key, None, "{class:?}");
+        }
     }
 
     #[test]

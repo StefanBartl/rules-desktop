@@ -72,8 +72,9 @@ pub struct Start {
     /// The engine the routes ask; `None`: the hub is up and every data route says the engine is
     /// not ready.
     pub engine: Option<Arc<dyn Engine>>,
-    /// The data classes of this device, loaded before the start: a `sources.json` that cannot be
-    /// used stops the start there ([`SourcePolicy::load`]). The default classifies nothing.
+    /// The data classes of this device. The caller loads them with [`SourcePolicy::load`] before
+    /// it starts the hub and must not start it when that fails; the program has no such caller yet
+    /// (`serve` comes later). The default classifies nothing.
     pub sources: Arc<SourcePolicy>,
 }
 

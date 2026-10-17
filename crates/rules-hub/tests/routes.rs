@@ -546,8 +546,31 @@ async fn a_snapshot_without_its_files_is_no_empty_list() {
     assert_eq!(rule.status, 200, "{rule:?}");
 }
 
+#[tokio::test]
+async fn a_broken_file_list_costs_the_sources_route_but_not_the_rules() {
+    let engine = FakeEngine::new();
+    let mut doc: Value = serde_json::from_str(SNAPSHOT).unwrap();
+    // A file without its count of rules.
+    doc["sources"] = json!([{ "etag": "sha256:0000000000000000", "path": "Checklists/DEP.md" }]);
+    doc["digest"] = json!("sha256:5555555555555555");
+    *engine.snapshot.lock().unwrap() = doc.to_string();
+    let hub = start_classified(
+        Some(Arc::clone(&engine)),
+        None,
+        policy(&[], Some(Class::Public)),
+    )
+    .await;
+    let r = hub.get(&route("sources")).await;
+    assert_eq!(r.status, 502, "{r:?}");
+    assert_eq!(r.json()["error"]["code"], "engine_failed");
+    let rule = hub.get(&format!("{}?id=DEP-01", route("rule"))).await;
+    assert_eq!(rule.status, 200, "{rule:?}");
+}
+
+/// Only what the loader refuses: no start reads `sources.json` yet, so that the start stops on
+/// such a file is tested once the program's `serve` does.
 #[test]
-fn a_sources_json_with_a_hash_key_stops_the_start_before_it_begins() {
+fn a_sources_json_with_a_hash_key_does_not_load() {
     let dir = std::env::temp_dir().join(format!("rules-hub-routes-hash-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

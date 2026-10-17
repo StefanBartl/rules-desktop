@@ -187,11 +187,11 @@ async fn sources(State(st): State<Arc<Shared>>, RawQuery(query): RawQuery) -> Re
     };
     // A snapshot without its files is not answered with an empty list: that would read as
     // "nothing to classify" instead of "not known".
-    let Some(files) = rt.held(&cached).and_then(|h| h.files.clone()) else {
+    // Computed once for each snapshot the hub holds.
+    let Some(body) = rt.held(&cached).and_then(|h| rt.sources_body(&h)) else {
         return no_snapshot();
     };
-    let body = rt.sources.document(&files);
-    json_response(StatusCode::OK, body.to_string(), None)
+    json_response(StatusCode::OK, body, None)
 }
 
 /// `GET /api/rules/about`: what this build is and which engine it runs. Without an engine, or with
