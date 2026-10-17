@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "kind": "hub.sources",
+  "files": [
+    { "path": "Checklists/DEP.md", "data_class": "internal", "rules": 2, "key": "Checklists" },
+    { "path": "Checklists/LUA.md", "data_class": "internal", "rules": 1, "key": "Checklists" },
+    { "path": "Checklists/_rules/ERR/ERR-100.md", "data_class": "private", "rules": 1, "key": "Checklists/_rules" }
+  ],
+  "keys": [
+    { "key": "Checklists", "class": "internal", "files": 3 },
+    { "key": "Checklists/_rules", "class": "private", "files": 1 }
+  ],
+  "unclassified": [],
+  "private": ["Checklists/_rules/ERR/ERR-100.md"]
+}

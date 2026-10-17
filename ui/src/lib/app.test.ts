@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { App, PREF_KEYS, RESCAN_EVERY_MS, SEARCH_DELAY_MS, TOKEN_KEY } from './app.svelte';
+import {
+  App,
+  EXCHANGE_RETRIES,
+  GONE_SETTLE_MS,
+  PREF_KEYS,
+  RESCAN_EVERY_MS,
+  SEARCH_DELAY_MS,
+  SEARCH_RETRIES,
+  SEARCH_RETRY_MS,
+  TOKEN_KEY,
+} from './app.svelte';
 import { snapshotDoc } from './fixtures';
 import { CODE, FakeHub, TOKEN, testEnv } from './testhub';
 
@@ -63,6 +73,32 @@ describe('the start', () => {
     await s.app.start(CODE);
     expect(s.app.phase).toBe('needs_pairing');
     expect(s.app.pairRefused).toBe(true);
+  });
+
+  it('trades a code again that the hub turned away for too many attempts, and does not call it used up', async () => {
+    const s = setup(false);
+    s.fake.failWith('/auth/exchange', 429);
+    await s.app.start(CODE);
+    expect(s.fake.count('/auth/exchange', 'POST')).toBe(2);
+    expect(s.app.pairRefused).toBe(false);
+    expect(s.app.phase).toBe('ready');
+  });
+
+  it('says to wait when the hub keeps turning the code away, not that it was used up', async () => {
+    const s = setup(false);
+    s.fake.failWith('/auth/exchange', 429, EXCHANGE_RETRIES + 1);
+    await s.app.start(CODE);
+    expect(s.fake.count('/auth/exchange', 'POST')).toBe(EXCHANGE_RETRIES + 1);
+    expect(s.app.phase).toBe('needs_pairing');
+    expect(s.app.pairRefused).toBe(false);
+    expect(s.app.notice).toEqual({ key: 'notice.pair_rate_limited' });
+  });
+
+  it('does not call a code used up for a body the hub could not read', async () => {
+    const s = setup(false);
+    s.fake.failWith('/auth/exchange', 400);
+    await s.app.start(CODE);
+    expect(s.app.pairRefused).toBe(false);
   });
 
   it('keeps the session of the tab when a code is refused', async () => {
@@ -138,19 +174,73 @@ describe('the stream', () => {
     expect(s.app.detail.state).toBe('ok');
   });
 
-  it('does not close the open rule when it was removed until the hub says 404', async () => {
+  it('keeps the open rule that is left out for one state, as a real hub sends it', async () => {
     const s = await ready();
     await s.app.openDetail('DEP-01');
-    // The rule is still there when the hub is asked once more (a retire that is not done yet).
+    // As the hub sees it: the rule is out of its snapshot when it says `removed`, so it answers 404 for it (K8).
+    s.fake.dropRule('DEP-01');
+    const sleep = s.env.sleep;
+    s.env.sleep = async (ms) => {
+      // The next state brings it back (a retire or a save that was not done yet).
+      if (ms === GONE_SETTLE_MS) s.fake.restore();
+      await sleep(ms);
+    };
     await s.app.onMessage({ event: 'rules', data: JSON.stringify({ changed_ids: [], removed: ['DEP-01'] }) });
+    expect(s.slept).toContain(GONE_SETTLE_MS);
     expect(s.app.detail).toMatchObject({ state: 'ok', id: 'DEP-01' });
     expect(s.app.notice).toBeNull();
-    // Now it is gone.
+  });
+
+  it('closes the open rule that is still gone after the pause, on a 404 of the hub, with a word', async () => {
+    const s = await ready();
+    await s.app.openDetail('DEP-01');
     s.fake.dropRule('DEP-01');
+    const rules = s.fake.count('/api/rules/rule');
     await s.app.onMessage({ event: 'rules', data: JSON.stringify({ changed_ids: [], removed: ['DEP-01'] }) });
+    expect(s.fake.count('/api/rules/rule')).toBe(rules + 1);
     expect(s.app.detail.state).toBe('none');
     expect(s.app.selectedId).toBeNull();
     expect(s.app.notice).toEqual({ key: 'detail.gone', params: { id: 'DEP-01' } });
+  });
+
+  it('closes an open rule that is gone on a resync or a truncated event as on a removal', async () => {
+    for (const message of [
+      { event: 'resync', data: '{}' },
+      { event: 'rules', data: JSON.stringify({ changed_ids: [], removed: [], truncated: true }) },
+    ]) {
+      const s = await ready();
+      await s.app.openDetail('LUA-01');
+      s.fake.dropRule('LUA-01');
+      await s.app.onMessage(message);
+      expect(s.app.detail.state, message.event).toBe('none');
+      expect(s.app.notice, message.event).toEqual({ key: 'detail.gone', params: { id: 'LUA-01' } });
+    }
+  });
+
+  it('says live while the stream is open, also after a read of the snapshot failed', async () => {
+    const s = await ready();
+    s.fake.failWith('/api/rules/snapshot', 502);
+    await s.app.refresh();
+    expect(s.app.connection).toBe('live');
+    await s.app.refresh();
+    expect(s.app.connection).toBe('live');
+    expect(s.fake.openStreams).toBe(1);
+  });
+
+  it('shows the rules when their classes cannot be read, all unclassified, and asks for the classes again', async () => {
+    const s = setup();
+    s.fake.failWith('/api/rules/sources', 502, 2);
+    await s.app.start(null);
+    expect(s.app.phase).toBe('ready');
+    expect(s.app.rules).toHaveLength(4);
+    expect(s.app.sources).toBeNull();
+    for (const rule of s.app.rules) expect(s.app.classOfRule(rule), rule.id).toBe('unclassified');
+    expect(s.app.notice).toEqual({ key: 'notice.sources_failed' });
+    await vi.waitFor(() => expect(s.app.connection).toBe('live'));
+    // The read on the open stream failed too; the next one, with the snapshot unchanged, gets them.
+    await s.app.refresh();
+    expect(s.app.sources?.kind).toBe('hub.sources');
+    expect(s.app.classOfRule({ source: 'Checklists/_rules/ERR/ERR-100.md' })).toBe('private');
   });
 
   it('reads everything again on resync', async () => {
@@ -222,6 +312,35 @@ describe('the search', () => {
     s.fake.searchIds = ['ERR-100'];
     await s.app.setQuery('of');
     expect(s.app.shown.map((r) => r.id)).toEqual(['ERR-100']);
+  });
+
+  it('asks again while the hub is still reading the texts', async () => {
+    const s = await ready();
+    s.fake.searchStates = ['building', 'ready'];
+    s.fake.searchIds = ['DEP-01'];
+    await s.app.setQuery('text');
+    expect(s.fake.count('/api/rules/search')).toBe(2);
+    expect(s.slept).toContain(SEARCH_RETRY_MS);
+    expect(s.app.searchHits?.status).toBe('ready');
+    expect(s.app.shown.map((r) => r.id)).toEqual(['DEP-01']);
+  });
+
+  it('stops asking a hub that keeps building after a few times', async () => {
+    const s = await ready();
+    s.fake.searchStates = Array<'building'>(SEARCH_RETRIES + 5).fill('building');
+    await s.app.setQuery('text');
+    expect(s.fake.count('/api/rules/search')).toBe(SEARCH_RETRIES + 1);
+    expect(s.app.searchHits?.status).toBe('building');
+  });
+
+  it('says when the hub found the words in more rules than it named', async () => {
+    const s = await ready();
+    s.fake.searchIds = ['DEP-01'];
+    await s.app.setQuery('text');
+    expect(s.app.searchHits).toMatchObject({ total: 1, cut: false });
+    s.fake.searchTotal = 120;
+    await s.app.setQuery('texts');
+    expect(s.app.searchHits).toMatchObject({ total: 120, cut: true });
   });
 
   it('asks only for the last words when they come quickly', async () => {

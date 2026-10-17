@@ -21,6 +21,8 @@ const HELLO: &str = include_str!("fixtures/golden/hello.json");
 const SNAPSHOT: &str = include_str!("fixtures/golden/snapshot.json");
 const RULE: &str = include_str!("fixtures/golden/rule.json");
 const ERROR: &str = include_str!("fixtures/golden/error.json");
+/// What the hub answers `sources` with for the golden snapshot; the page's tests answer with it.
+const HUB_SOURCES: &str = include_str!("fixtures/hub/sources.json");
 
 /// The digest of the golden snapshot: its ETag.
 const SNAPSHOT_DIGEST: &str = "sha256:9609c01610189534";
@@ -523,6 +525,25 @@ async fn sources_gives_each_file_its_class_and_the_strictest_of_two_keys() {
             { "key": "wkdbook-Lua/Checklists", "class": "private", "files": 1 },
         ])
     );
+}
+
+/// The page's tests answer `sources` with `tests/fixtures/hub/sources.json` (ui/src/lib/fixtures.ts
+/// imports it): it must be what the hub writes for the golden snapshot with the policy named there.
+#[tokio::test]
+async fn the_sources_document_of_the_page_tests_is_what_the_hub_writes() {
+    let engine = FakeEngine::new();
+    let classes = policy(
+        &[
+            ("Checklists", Class::Internal),
+            ("Checklists/_rules", Class::Private),
+        ],
+        None,
+    );
+    let hub = start_classified(Some(Arc::clone(&engine)), None, classes).await;
+    let r = hub.get(&route("sources")).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let written: Value = serde_json::from_str(HUB_SOURCES).unwrap();
+    assert_eq!(r.json(), written, "the hub now writes {:#}", r.json());
 }
 
 #[tokio::test]

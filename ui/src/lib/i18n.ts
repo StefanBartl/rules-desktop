@@ -55,6 +55,7 @@ const en = {
   'list.empty': 'No rule matches the filter.',
   'search.building': 'The hub is still reading the texts; only titles are searched.',
   'search.failed': 'The texts cannot be searched; only titles are.',
+  'search.cut': 'The text was found in {total} rules; the list holds the first {shown} of them and every title match.',
   'class.public': 'public',
   'class.internal': 'internal',
   'class.private': 'private',
@@ -84,6 +85,8 @@ const en = {
   'palette.filter_reset': 'Clear all filters',
   'palette.rule': 'Rule',
   'notice.engine_gone': 'The engine does not answer.',
+  'notice.sources_failed': 'The data classes could not be read; every rule counts as unclassified until they are.',
+  'notice.pair_rate_limited': 'The hub refused too many pairing attempts. Wait a minute, then ask the hub for a new link.',
 };
 
 export type Key = keyof typeof en;
@@ -137,6 +140,7 @@ const de: Record<Key, string> = {
   'list.empty': 'Keine Regel passt zum Filter.',
   'search.building': 'Der Hub liest die Texte noch; gesucht wird nur in den Titeln.',
   'search.failed': 'Die Texte lassen sich nicht durchsuchen, nur die Titel.',
+  'search.cut': 'Der Text steht in {total} Regeln; die Liste zeigt die ersten {shown} davon und alle Titeltreffer.',
   'class.public': 'öffentlich',
   'class.internal': 'intern',
   'class.private': 'privat',
@@ -166,6 +170,8 @@ const de: Record<Key, string> = {
   'palette.filter_reset': 'Alle Filter aus',
   'palette.rule': 'Regel',
   'notice.engine_gone': 'Die Engine antwortet nicht.',
+  'notice.sources_failed': 'Die Datenklassen ließen sich nicht lesen; bis dahin gilt jede Regel als nicht klassifiziert.',
+  'notice.pair_rate_limited': 'Der Hub hat zu viele Kopplungsversuche abgewiesen. Eine Minute warten, dann einen neuen Link vom Hub holen.',
 };
 
 export const dictionaries: Record<Lang, Record<Key, string>> = { en, de };

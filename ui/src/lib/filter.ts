@@ -73,7 +73,8 @@ export function familiesOf(rules: readonly RuleSummary[]): string[] {
 /** The kinds of check the rules have, sorted, `none` last: the choices of the check filter. */
 export function checkKindsOf(rules: readonly RuleSummary[]): string[] {
   const kinds = [...new Set(rules.map(checkKindOf))].filter((k) => k !== NO_CHECK).sort(byText);
-  return rules.some((r) => r.check_type === undefined) ? [...kinds, NO_CHECK] : kinds;
+  // The same test as the filter's: a rule it files under `none` must have `none` to choose.
+  return rules.some((r) => checkKindOf(r) === NO_CHECK) ? [...kinds, NO_CHECK] : kinds;
 }
 
 /** One step through a list of ids: at an end it stays, from nothing it starts at the end it moves from. */

@@ -7,6 +7,7 @@ import type { HubSources } from './api';
 import goldenError from '../../../crates/rules-hub/tests/fixtures/golden/error.json';
 import goldenRule from '../../../crates/rules-hub/tests/fixtures/golden/rule.json';
 import goldenSnapshot from '../../../crates/rules-hub/tests/fixtures/golden/snapshot.json';
+import hubSources from '../../../crates/rules-hub/tests/fixtures/hub/sources.json';
 
 /** A JSON import is typed by its values (`kind: string`); the kind is checked, then it is the contract's type. */
 function ofKind<T>(doc: { kind: string }, kind: string): T {
@@ -42,23 +43,10 @@ export function goldenText(name: 'snapshot' | 'rule' | 'error'): string {
 
 /**
  * What `GET /api/rules/sources` answers for the golden snapshot with a `sources.json` that holds
- * `{"Checklists": {"class": "internal"}, "Checklists/_rules": {"class": "private"}}` and no default, written out
- * as the hub writes it. The page reads the classes from here; it never works one out.
+ * `{"Checklists": {"class": "internal"}, "Checklists/_rules": {"class": "private"}}` and no default. The document is
+ * the one a Rust test of the hub compares its answer with (`tests/routes.rs`), not a copy written out here. The page
+ * reads the classes from it; it never works one out.
  */
 export function hubSourcesDoc(): HubSources {
-  return {
-    schema: 1,
-    kind: 'hub.sources',
-    files: [
-      { path: 'Checklists/DEP.md', data_class: 'internal', rules: 2, key: 'Checklists' },
-      { path: 'Checklists/LUA.md', data_class: 'internal', rules: 1, key: 'Checklists' },
-      { path: 'Checklists/_rules/ERR/ERR-100.md', data_class: 'private', rules: 1, key: 'Checklists/_rules' },
-    ],
-    keys: [
-      { key: 'Checklists', class: 'internal', files: 3 },
-      { key: 'Checklists/_rules', class: 'private', files: 1 },
-    ],
-    unclassified: [],
-    private: ['Checklists/_rules/ERR/ERR-100.md'],
-  };
+  return copy(ofKind<HubSources>(hubSources, 'hub.sources'));
 }

@@ -61,6 +61,16 @@ export const RESCAN_EVERY_MS = 5000;
 /** Waits before the hub is asked again: when it did not answer, and when its engine was not ready. */
 export const OFFLINE_RETRY_MS = 3000;
 export const UNAVAILABLE_RETRY_MS = 5000;
+/** A search the hub answers with `building` (it is still reading the texts) is asked again, as in tasks. */
+export const SEARCH_RETRY_MS = 1500;
+export const SEARCH_RETRIES = 8;
+/** A pairing code the hub turned away for too many attempts (429) is still good: it is traded again a few times. */
+export const EXCHANGE_RETRIES = 3;
+/**
+ * The open rule left the snapshot: the page waits this long and reads again before it asks for it. The hub answers
+ * 404 for an id it does not hold (K8), and a retire or a file saved half way leaves a rule out for one state.
+ */
+export const GONE_SETTLE_MS = 2000;
 
 function safe<T>(work: () => T): T | null {
   try {
@@ -68,6 +78,16 @@ function safe<T>(work: () => T): T | null {
   } catch {
     return null;
   }
+}
+
+/** The hits of a text search the list uses; `cut`: the hub found the words in more rules than it named. */
+export interface SearchHits {
+  query: string;
+  ids: ReadonlySet<string>;
+  status: 'ready' | 'building' | 'failed';
+  /** How many rules hold the words, as the hub counted them. */
+  total: number;
+  cut: boolean;
 }
 
 /** The ids of an event of the stream; anything that is not a list of strings is no id. */
@@ -96,9 +116,7 @@ export class App {
   selectedFamily = $state<string | null>(null);
   detail = $state.raw<Detail>({ state: 'none' });
   /** The ids the hub found the words of the filter in, with the state of its index; `null`: no text search. */
-  searchHits = $state.raw<{ query: string; ids: ReadonlySet<string>; status: 'ready' | 'building' | 'failed' } | null>(
-    null,
-  );
+  searchHits = $state.raw<SearchHits | null>(null);
   paletteOpen = $state(false);
   notice = $state.raw<Notice | null>(null);
   /** Goes up by one each time the search box should take the focus (`/`). */
@@ -106,6 +124,8 @@ export class App {
   frecency = $state.raw<Frecency>({});
 
   private stopped = false;
+  /** The event stream is open; only the stream says `live`. */
+  private streamOpen = false;
   private abort: AbortController | null = null;
   private detailAbort: AbortController | null = null;
   private searchAbort: AbortController | null = null;
@@ -181,14 +201,33 @@ export class App {
     this.pairRefused = false;
     let token = safe(() => this.env.session.getItem(TOKEN_KEY));
     if (code) {
-      try {
-        token = await this.env.hub.exchange(code);
-        safe(() => this.env.session.setItem(TOKEN_KEY, token as string));
-      } catch (error) {
-        // A code that is spent or too old: a session the tab has is still good. Only a refusal of the hub says so.
-        if (error instanceof ApiError && error.status >= 400 && error.status < 500) this.pairRefused = token === null;
-        else if (token === null) {
-          this.phase = 'offline';
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const traded = await this.env.hub.exchange(code);
+          token = traded;
+          safe(() => this.env.session.setItem(TOKEN_KEY, traded));
+          break;
+        } catch (error) {
+          // A code that is spent or too old (401, the one answer of the hub for both): a session the tab has is still
+          // good. Only that refusal says the code is bad.
+          if (error instanceof ApiError && error.status === 401) {
+            this.pairRefused = token === null;
+            break;
+          }
+          // Too many attempts: the hub did not look at the code, which is still good but no longer in the address.
+          const limited = error instanceof ApiError && error.status === 429;
+          if (limited && attempt < EXCHANGE_RETRIES) {
+            await this.env.sleep(OFFLINE_RETRY_MS);
+            if (this.stopped) return;
+            continue;
+          }
+          if (token !== null) break;
+          if (limited) {
+            this.phase = 'needs_pairing';
+            this.notice = { key: 'notice.pair_rate_limited' };
+          } else {
+            this.phase = 'offline';
+          }
           return;
         }
       }
@@ -274,14 +313,9 @@ export class App {
       if (result.kind === 'fresh') {
         this.snapshot = result.doc;
         this.etag = result.etag;
-        // The classes are of the files of this snapshot: a new snapshot may have other files.
-        this.sources = await hub.sources();
-      } else if (this.sources === null) {
-        this.sources = await hub.sources();
+        // The classes are of the files of a snapshot: a new snapshot may have other files.
+        this.sources = null;
       }
-      this.phase = 'ready';
-      if (this.connection === 'offline') this.connection = 'reconnecting';
-      this.keepSelection();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return;
       if (error instanceof ApiError && error.code === 'engine_unavailable') {
@@ -290,7 +324,26 @@ export class App {
         return;
       }
       if (this.snapshot === null) this.phase = 'offline';
-      this.connection = 'offline';
+      // The hub did not answer this read; whether the stream is open is the stream's to say.
+      if (!this.streamOpen) this.connection = 'offline';
+      return;
+    }
+    // The rules do not wait for their classes: without them every rule is unclassified (fail-closed), and the next
+    // read asks again.
+    if (this.sources === null) await this.readSources();
+    if (!hub.hasToken) return;
+    this.phase = 'ready';
+    this.connection = this.streamOpen ? 'live' : 'reconnecting';
+    this.keepSelection();
+  }
+
+  private async readSources(): Promise<void> {
+    try {
+      this.sources = await this.env.hub.sources();
+    } catch (error) {
+      this.sources = null;
+      if (error instanceof ApiError && error.status === 401) return;
+      if (this.notice?.key !== 'notice.sources_failed') this.notice = { key: 'notice.sources_failed' };
     }
   }
 
@@ -316,6 +369,7 @@ export class App {
           {
             onOpen: () => {
               attempt = 0;
+              this.streamOpen = true;
               this.connection = 'live';
               // What happened while the stream was down.
               void this.refresh();
@@ -330,6 +384,8 @@ export class App {
           this.lostSession();
           return;
         }
+      } finally {
+        this.streamOpen = false;
       }
       if (this.stopped || !this.env.hub.hasToken) return;
       this.connection = 'reconnecting';
@@ -353,7 +409,7 @@ export class App {
       const open = this.detail.state === 'none' ? null : this.detail.id;
       if (open === null) return;
       if (ids(doc['removed']).includes(open)) {
-        await this.checkGone(open);
+        await this.settleGone(open);
       } else if (ids(doc['changed_ids']).includes(open) || doc['truncated'] === true) {
         await this.loadDetail(open);
       }
@@ -378,23 +434,23 @@ export class App {
   }
 
   /**
-   * The open rule is not in the new snapshot. It is not closed at once (a retire leaves it out for one state):
-   * the hub is asked once, and only its 404 closes the detail, with a word why.
+   * The open rule is not in the new snapshot. It is not closed at once: a retire or a file saved half way leaves it
+   * out for one state, and the hub answers 404 for any id it does not hold (K8), so asking at once would close it
+   * every time. The page waits a moment and reads the snapshot again, then asks for the rule once; only a 404 closes
+   * the detail, with a word why (`loadDetail`).
    */
-  private async checkGone(id: string): Promise<void> {
-    try {
-      const doc = await this.env.hub.rule(id);
-      if (this.isOpen(id)) this.detail = { state: 'ok', id, doc };
-    } catch (error) {
-      if (!this.isOpen(id)) return;
-      if (error instanceof ApiError && error.status === 404) {
-        this.detail = { state: 'none' };
-        if (this.selectedId === id) this.selectedId = null;
-        this.notice = { key: 'detail.gone', params: { id } };
-      } else {
-        this.detail = { state: 'failed', id };
-      }
-    }
+  private async settleGone(id: string): Promise<void> {
+    await this.env.sleep(GONE_SETTLE_MS);
+    if (this.stopped || !this.isOpen(id)) return;
+    await this.refresh();
+    if (this.isOpen(id)) await this.loadDetail(id);
+  }
+
+  /** The hub does not hold the open rule any more: the detail closes with a word why. */
+  private closeGone(id: string): void {
+    this.detail = { state: 'none' };
+    if (this.selectedId === id) this.selectedId = null;
+    this.notice = { key: 'detail.gone', params: { id } };
   }
 
   /** The window got the focus back: ask for a scan, at most every few seconds, then read. */
@@ -455,16 +511,30 @@ export class App {
       this.searchHits = null;
       return;
     }
-    await this.env.sleep(SEARCH_DELAY_MS);
-    if (seq !== this.searchSeq) return;
-    const abort = new AbortController();
-    this.searchAbort = abort;
-    try {
-      const result = await this.env.hub.search(query, abort.signal);
+    for (let attempt = 0; ; attempt++) {
+      // The hub reads the texts a moment after it starts: a `building` answer is asked again, a few times.
+      await this.env.sleep(attempt === 0 ? SEARCH_DELAY_MS : SEARCH_RETRY_MS);
       if (seq !== this.searchSeq) return;
-      this.searchHits = { query, ids: new Set(result.hits.map((h) => h.id)), status: result.status };
-    } catch {
-      if (seq === this.searchSeq) this.searchHits = { query, ids: new Set(), status: 'failed' };
+      const abort = new AbortController();
+      this.searchAbort = abort;
+      try {
+        const result = await this.env.hub.search(query, abort.signal);
+        if (seq !== this.searchSeq) return;
+        const found = new Set(result.hits.map((h) => h.id));
+        const total = Math.max(result.total, found.size);
+        this.searchHits = {
+          query,
+          ids: found,
+          status: result.status,
+          total,
+          // More rules hold the words than the hub named (it names SEARCH_LIMIT at most): the list must say so.
+          cut: result.partial === true || total > found.size,
+        };
+        if (result.status !== 'building' || attempt >= SEARCH_RETRIES) return;
+      } catch {
+        if (seq === this.searchSeq) this.searchHits = { query, ids: new Set(), status: 'failed', total: 0, cut: false };
+        return;
+      }
     }
   }
 
@@ -502,10 +572,11 @@ export class App {
       if (!abort.signal.aborted && this.isOpen(id)) {
         this.detail = { state: 'ok', id, doc };
       }
-    } catch {
-      if (!abort.signal.aborted && this.isOpen(id)) {
-        this.detail = { state: 'failed', id };
-      }
+    } catch (error) {
+      if (abort.signal.aborted || !this.isOpen(id)) return;
+      // The hub holds no such rule: after a removal, a resync or a truncated event alike, the detail closes.
+      if (error instanceof ApiError && error.status === 404) this.closeGone(id);
+      else this.detail = { state: 'failed', id };
     }
   }
 

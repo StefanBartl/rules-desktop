@@ -42,8 +42,14 @@ export class FakeHub {
   /** Ids `rule` answers 404 for although they are in the snapshot. */
   goneIds = new Set<string>();
   searchIds: string[] = [];
+  /** The `total` the search answers with; `null`: the number of `searchIds`. */
+  searchTotal: number | null = null;
+  /** The states of the search index for the next searches, one each; then `ready`. */
+  searchStates: ('ready' | 'building' | 'failed')[] = [];
   /** The stream is refused with this status (0: it is opened). */
   streamStatus = 0;
+  /** The next answers of a path, one status each, before the path answers as usual. */
+  private failures = new Map<string, number[]>();
   private streams: ReadableStreamDefaultController<Uint8Array>[] = [];
 
   readonly fetchFn: typeof fetch = async (input, init = {}) => {
@@ -51,6 +57,8 @@ export class FakeHub {
     const headers = new Headers(init.headers);
     const method = init.method ?? 'GET';
     this.asked.push({ method, path: url.pathname, query: url.searchParams, headers });
+    const failure = this.failures.get(url.pathname)?.shift();
+    if (failure !== undefined) return json({ error: { code: `status_${failure}`, message: 'failed' } }, failure);
     const token = (headers.get('Authorization') ?? '').replace(/^Bearer /, '');
     if (url.pathname === '/api/rules/hello') {
       if (this.downFor > 0) {
@@ -89,9 +97,9 @@ export class FakeHub {
       }
       case '/api/rules/search':
         return json({
-          status: 'ready',
+          status: this.searchStates.shift() ?? 'ready',
           indexed: 4,
-          total: this.searchIds.length,
+          total: this.searchTotal ?? this.searchIds.length,
           hits: this.searchIds.map((id) => ({
             id,
             score: 1,
@@ -138,6 +146,17 @@ export class FakeHub {
 
   count(path: string, method = 'GET'): number {
     return this.asked.filter((a) => a.path === path && a.method === method).length;
+  }
+
+  /** The next `times` requests of `path` are answered with `status`. */
+  failWith(path: string, status: number, times = 1): void {
+    this.failures.set(path, [...(this.failures.get(path) ?? []), ...Array<number>(times).fill(status)]);
+  }
+
+  /** The golden snapshot again, all four rules, under a tag of its own. */
+  restore(): void {
+    this.snapshotText = goldenText('snapshot');
+    this.etag = `${this.etag}-restored`;
   }
 
   /** The snapshot without one rule, under a new tag. */

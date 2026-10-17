@@ -34,6 +34,13 @@ describe('the filter of the rule list', () => {
     expect(familiesOf(rules)).toEqual(['DEP', 'ERR', 'LUA']);
   });
 
+  it('offers `none` for a rule it files under `none`, also one whose check_type is null', () => {
+    // Not the contract (it leaves the field out), but a rule the filter keeps under `none` must be reachable.
+    const odd = [{ ...rules[0]!, check_type: null as unknown as undefined }];
+    expect(checkKindOf(odd[0]!)).toBe(NO_CHECK);
+    expect(checkKindsOf(odd)).toEqual([NO_CHECK]);
+  });
+
   it('matches words in the title without case, and the text through the hits of the hub', () => {
     const f = { ...emptyFilter(), query: '  FUNCTION ' };
     expect(idsOf(applyFilter(rules, f))).toEqual(['LUA-01']);
