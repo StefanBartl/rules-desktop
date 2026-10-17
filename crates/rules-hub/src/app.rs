@@ -16,6 +16,7 @@ use serde_json::Value;
 
 use crate::editor::TerminalOpener;
 use crate::engine::{cli_config, probe, CliEngine, Engine, DISCOVERY};
+use crate::locate::ProcessLocator;
 use crate::sources::SourcePolicy;
 use crate::store::RefreshOptions;
 use crate::ui::UiFiles;
@@ -94,6 +95,8 @@ pub struct EngineState {
     pub vault: Option<PathBuf>,
     /// The Neovim that was found, for opening a file in it.
     pub nvim: Option<PathBuf>,
+    /// How the engine is started, for the questions that are not documents (where a rule's file is).
+    pub locate_config: Option<crate::engine::CliEngineConfig>,
 }
 
 /// Find Neovim, the engine and the vault, start the engine and ask it `hello`.
@@ -108,6 +111,7 @@ pub async fn engine_state(file: &FileConfig<NoSettings>, env: &Env) -> EngineSta
         note: Some(note),
         vault: None,
         nvim: None,
+        locate_config: None,
     };
     let inputs = AppInputs {
         lib_dir: None,
@@ -118,6 +122,7 @@ pub async fn engine_state(file: &FileConfig<NoSettings>, env: &Env) -> EngineSta
         Err(problem) => return failed(problem.code(), problem.to_string()),
     };
     let cfg = cli_config(&setup, env.clone());
+    let locate_config = Some(cfg.clone());
     // A persistent engine process answers in milliseconds where a process per question needs a
     // second; `RULES_HUB_ENGINE=process` asks for the one-process-per-question way.
     let one_process = env
@@ -138,6 +143,7 @@ pub async fn engine_state(file: &FileConfig<NoSettings>, env: &Env) -> EngineSta
             engine: Some(Arc::new(engine)),
             vault: Some(setup.vault.value.clone()),
             nvim: Some(setup.nvim.value.clone()),
+            locate_config,
             note: setup
                 .lib_problem
                 .as_ref()
@@ -212,11 +218,11 @@ pub async fn serve(opts: ServeOptions) -> Result<(), String> {
         engine: state.engine.clone(),
         sources: Arc::clone(&sources),
         editor: state
-            .nvim
+            .locate_config
             .clone()
-            .zip(state.vault.clone())
-            .map(|(nvim, vault)| Editor {
-                rulesets: vault.join("rulesets"),
+            .zip(state.nvim.clone())
+            .map(|(cfg, nvim)| Editor {
+                locator: Arc::new(ProcessLocator::new(cfg)),
                 opener: Arc::new(TerminalOpener::new(nvim, env.clone())),
             }),
         ui: ui.clone(),

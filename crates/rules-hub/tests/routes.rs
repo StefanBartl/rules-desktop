@@ -907,69 +907,129 @@ impl rules_hub::editor::FileOpener for Recorder {
     }
 }
 
-/// The rule sets of a vault with the file the golden rule names (`Checklists/DEP.md`).
-fn rulesets_with_file(name: &str) -> std::path::PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("rules-desktop-open-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join("Checklists")).unwrap();
-    std::fs::write(dir.join("Checklists/DEP.md"), "# DEP\n").unwrap();
-    dir
+/// An engine that says where a rule's file is, as the answer of `rules.lua locate`, and keeps the questions.
+struct Places {
+    answer: Mutex<Result<rules_hub::locate::Located, &'static str>>,
+    asked: Mutex<Vec<String>>,
 }
 
-async fn start_editing(
-    engine: &Arc<FakeEngine>,
-    rulesets: &std::path::Path,
-) -> (Hub, Arc<Recorder>) {
+impl rules_hub::locate::Locate for Places {
+    fn locate<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> appkit_hub::BoxFuture<'a, Result<rules_hub::locate::Located, &'static str>> {
+        self.asked.lock().unwrap().push(id.to_owned());
+        let answer = self.answer.lock().unwrap().clone();
+        Box::pin(async move { answer })
+    }
+}
+
+struct Opening {
+    hub: Hub,
+    engine: Arc<FakeEngine>,
+    recorder: Arc<Recorder>,
+    places: Arc<Places>,
+}
+
+impl Opening {
+    fn says(&self, file: &std::path::Path, root: Option<&std::path::Path>) {
+        *self.places.answer.lock().unwrap() = Ok(rules_hub::locate::Located {
+            file: file.to_path_buf(),
+            root: root.map(std::path::Path::to_path_buf),
+        });
+    }
+
+    async fn open(&self, body: &str) -> appkit_testkit::wire::Reply {
+        post(
+            &self.hub.server,
+            &route("open"),
+            Some(&self.hub.token),
+            body,
+        )
+        .await
+    }
+
+    fn opened(&self) -> Vec<(std::path::PathBuf, Option<u32>)> {
+        self.recorder.0.lock().unwrap().clone()
+    }
+}
+
+async fn start_editing() -> Opening {
+    let engine = FakeEngine::new();
     let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
+    let places = Arc::new(Places {
+        answer: Mutex::new(Err("not told")),
+        asked: Mutex::new(Vec::new()),
+    });
     let hub = start_full(
-        Some(Arc::clone(engine)),
+        Some(Arc::clone(&engine)),
         None,
         Arc::default(),
         None,
         Some(rules_hub::Editor {
-            rulesets: rulesets.to_path_buf(),
+            locator: Arc::clone(&places) as Arc<dyn rules_hub::locate::Locate>,
             opener: Arc::clone(&recorder) as Arc<dyn rules_hub::editor::FileOpener>,
         }),
     )
     .await;
-    (hub, recorder)
+    Opening {
+        hub,
+        engine,
+        recorder,
+        places,
+    }
 }
 
-async fn open(hub: &Hub, body: &str) -> appkit_testkit::wire::Reply {
-    post(&hub.server, &route("open"), Some(&hub.token), body).await
+/// A rule set with a file in it, somewhere that is nothing like `<vault>/rulesets/<name in the document>`.
+fn ruleset(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let root =
+        std::env::temp_dir().join(format!("rules-desktop-open-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    let file = root.join("sub").join("one.md");
+    std::fs::write(&file, "# one\n").unwrap();
+    (root, file)
 }
 
 #[tokio::test]
-async fn the_file_of_a_rule_is_shown_at_its_line() {
-    let engine = FakeEngine::new();
-    let dir = rulesets_with_file("ok");
-    let (hub, recorder) = start_editing(&engine, &dir).await;
-    let r = open(&hub, r#"{"id":"DEP-01"}"#).await;
+async fn the_file_comes_from_the_engine_and_not_from_the_name_in_the_document() {
+    let o = start_editing().await;
+    // The golden rule says its source is `Checklists/DEP.md`; its file is somewhere that name does not lead to.
+    let (root, file) = ruleset("place");
+    o.says(&file, Some(&root));
+    let r = o.open(r#"{"id":"DEP-01"}"#).await;
     assert_eq!(r.status, 200, "{r:?}");
-    let seen = recorder.0.lock().unwrap().clone();
+    let seen = o.opened();
     assert_eq!(seen.len(), 1, "{seen:?}");
-    assert!(seen[0].0.ends_with("Checklists/DEP.md") || seen[0].0.ends_with(r"Checklists\DEP.md"));
+    assert_eq!(
+        seen[0].0.canonicalize().unwrap(),
+        file.canonicalize().unwrap()
+    );
     assert_eq!(seen[0].1, Some(5), "the line of the golden rule");
+    assert_eq!(*o.places.asked.lock().unwrap(), ["DEP-01"]);
 }
 
 #[tokio::test]
-async fn only_a_rule_of_the_snapshot_is_opened_and_only_a_file_of_the_rule_sets() {
-    let engine = FakeEngine::new();
-    let dir = rulesets_with_file("refuse");
-    let (hub, recorder) = start_editing(&engine, &dir).await;
-    // An id the snapshot does not hold is not asked of the engine and opens nothing.
+async fn only_a_rule_of_the_snapshot_is_asked_for() {
+    let o = start_editing().await;
+    let (root, file) = ruleset("known");
+    o.says(&file, Some(&root));
+    // An id the snapshot does not hold reaches neither the engine nor the locator.
     for body in [r#"{"id":"NOPE-01"}"#, r#"{"id":"../x"}"#] {
-        let r = open(&hub, body).await;
+        let r = o.open(body).await;
         assert_eq!(r.status, 404, "{body}: {r:?}");
     }
     assert_eq!(
-        engine.count("rule"),
+        o.engine.count("rule"),
         0,
         "an id of no rule was asked of the engine"
     );
-    // A file name the client sends is not a thing: the request holds an id and nothing else.
-    let r = open(&hub, r#"{"id":"DEP-01","file":"C:/x"}"#).await;
+    assert!(
+        o.places.asked.lock().unwrap().is_empty(),
+        "an id of no rule was located"
+    );
+    // The request holds an id and nothing else: a file name from the client is not a thing.
+    let r = o.open(r#"{"id":"DEP-01","file":"C:/x"}"#).await;
     assert_eq!(r.status, 400, "{r:?}");
     for bad in [
         "{}",
@@ -978,34 +1038,93 @@ async fn only_a_rule_of_the_snapshot_is_opened_and_only_a_file_of_the_rule_sets(
         r#"{"id":5}"#,
         r#"{"id":"a\u0000b"}"#,
     ] {
-        let r = open(&hub, bad).await;
+        let r = o.open(bad).await;
         assert_eq!(r.status, 400, "{bad}: {r:?}");
     }
-    // The engine names a source that climbs out of the rule sets, or one that is not there.
-    for source in [
-        "../outside.md",
-        "/etc/passwd",
-        "Checklists/GONE.md",
-        "Checklists",
-    ] {
-        let mut doc: Value = serde_json::from_str(RULE).unwrap();
-        doc["rule"]["source"] = json!(source);
-        *engine.rule.lock().unwrap() = doc.to_string();
-        let r = open(&hub, r#"{"id":"DEP-01"}"#).await;
-        assert_eq!(r.status, 400, "{source}: {r:?}");
-        assert_eq!(r.json()["error"]["code"], "open_refused");
+    assert!(o.opened().is_empty());
+}
+
+#[tokio::test]
+async fn a_file_outside_the_ruleset_the_engine_names_is_not_opened() {
+    let o = start_editing().await;
+    let (root, file) = ruleset("inside");
+    let (other_root, other_file) = ruleset("outside");
+    let climbing = root
+        .join("sub")
+        .join("..")
+        .join("..")
+        .join(other_root.file_name().unwrap())
+        .join("sub")
+        .join("one.md");
+    let cases: Vec<(&str, std::path::PathBuf, Option<&std::path::Path>)> = vec![
+        (
+            "a file of another rule set",
+            other_file.clone(),
+            Some(&root),
+        ),
+        ("a climb out of the rule set", climbing, Some(&root)),
+        (
+            "a rule set that is not there",
+            file.clone(),
+            Some(std::path::Path::new("/no/such/set")),
+        ),
+        ("a folder", root.join("sub"), Some(&root)),
+        (
+            "a file that is not there",
+            root.join("sub").join("gone.md"),
+            Some(&root),
+        ),
+        (
+            "a relative place",
+            std::path::PathBuf::from("sub/one.md"),
+            Some(&root),
+        ),
+        ("no rule set at all", file.clone(), None),
+    ];
+    for (what, file, set) in cases {
+        o.says(&file, set);
+        let r = o.open(r#"{"id":"DEP-01"}"#).await;
+        assert_eq!(r.status, 400, "{what}: {r:?}");
+        assert_eq!(r.json()["error"]["code"], "open_refused", "{what}");
     }
-    assert!(
-        recorder.0.lock().unwrap().is_empty(),
-        "something was opened"
-    );
+    let _ = other_root;
+    assert!(o.opened().is_empty(), "something was opened");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_link_in_the_ruleset_does_not_lead_out_of_it() {
+    let o = start_editing().await;
+    let (root, _) = ruleset("link");
+    let (_, outside) = ruleset("linked");
+    let link = root.join("sub").join("link.md");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    o.says(&link, Some(&root));
+    let r = o.open(r#"{"id":"DEP-01"}"#).await;
+    assert_eq!(r.status, 400, "{r:?}");
+    assert!(o.opened().is_empty());
+}
+
+#[tokio::test]
+async fn an_engine_that_cannot_say_is_a_bad_gateway_and_opens_nothing() {
+    let o = start_editing().await;
+    let r = o.open(r#"{"id":"DEP-01"}"#).await;
+    assert_eq!(r.status, 502, "{r:?}");
+    assert_eq!(r.json()["error"]["code"], "engine_failed");
+    assert!(o.opened().is_empty());
 }
 
 #[tokio::test]
 async fn a_hub_without_an_editor_says_so_and_a_session_is_needed() {
     let engine = FakeEngine::new();
     let hub = start(&engine).await;
-    let r = open(&hub, r#"{"id":"DEP-01"}"#).await;
+    let r = post(
+        &hub.server,
+        &route("open"),
+        Some(&hub.token),
+        r#"{"id":"DEP-01"}"#,
+    )
+    .await;
     assert_eq!(r.status, 404, "{r:?}");
     assert_eq!(r.json()["error"]["code"], "open_unavailable");
     let anonymous = post(&hub.server, &route("open"), None, r#"{"id":"DEP-01"}"#).await;

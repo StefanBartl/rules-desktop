@@ -20,6 +20,7 @@ pub mod bodies;
 pub mod editor;
 pub mod engine;
 mod live;
+pub mod locate;
 mod routes;
 mod runtime;
 pub mod sources;

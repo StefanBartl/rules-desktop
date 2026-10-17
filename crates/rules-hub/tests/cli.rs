@@ -567,3 +567,87 @@ async fn open_writes_the_file_and_the_line_of_the_rule_it_would_show() {
         1
     );
 }
+
+/// A rule file with one rule in it.
+fn write_rule(path: &Path, id: &str, title: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        path,
+        format!("# x\n\n#### `{id}` - {title}\n\n```rule\nid = \"{id}\",\nseverity = \"recommended\",\n```\n\ntext\n"),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn open_finds_the_file_by_the_place_the_engine_knows_not_by_the_name_in_the_document() {
+    // Two rule sets outside the vault with the same last folder: the documents call them one/Checklists and
+    // two/Checklists. Under `<vault>/rulesets/one/Checklists` lies a decoy of the first name that is not loaded
+    // (the vault names its rule sets itself): a hub that puts the name under `rulesets/` opens the decoy.
+    let base = std::env::temp_dir().join(format!("rules-desktop-places-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (one, two) = (
+        base.join("one").join("Checklists"),
+        base.join("two").join("Checklists"),
+    );
+    write_rule(&one.join("a.md"), "AAA-01", "first");
+    write_rule(&two.join("b.md"), "BBB-01", "second");
+    let vault = base.join("vault");
+    write_rule(
+        &vault.join("rulesets/one/Checklists/a.md"),
+        "ZZZ-01",
+        "decoy, not loaded",
+    );
+    std::fs::write(
+        vault.join(".rules.json"),
+        serde_json::json!({ "rulesets": [one, two] }).to_string(),
+    )
+    .unwrap();
+    let dir = config_dir(
+        "places",
+        Some(r#"{"schema":1,"default":"internal","sources":{}}"#),
+    );
+    std::fs::write(
+        dir.join("config.json"),
+        serde_json::json!({ "vault": vault }).to_string(),
+    )
+    .unwrap();
+    let hub = serve_in(dir);
+    let token = token(&hub).await;
+    let snapshot = get(&hub, &token, "/api/rules/snapshot").await.1;
+    assert!(
+        has_rule(&snapshot, "AAA-01") && has_rule(&snapshot, "BBB-01"),
+        "{snapshot}"
+    );
+    assert!(!has_rule(&snapshot, "ZZZ-01"), "the decoy was loaded");
+
+    let auth = format!("Bearer {token}");
+    let origin = format!("http://127.0.0.1:{}", hub.port);
+    for (id, want) in [
+        ("AAA-01", "one/Checklists/a.md"),
+        ("BBB-01", "two/Checklists/b.md"),
+    ] {
+        let body = format!(r#"{{"id":"{id}"}}"#);
+        let reply = client::request(
+            hub.port,
+            "POST",
+            "/api/rules/open",
+            &[
+                ("Authorization", &auth),
+                ("Origin", &origin),
+                ("Content-Type", "application/json"),
+            ],
+            &body,
+        )
+        .await
+        .expect("request");
+        assert_eq!(reply.status, 200, "{id}: {}", reply.body);
+        let logged = std::fs::read_to_string(hub.dir.join("editor.log")).unwrap();
+        let last = logged.lines().last().unwrap().replace('\\', "/");
+        assert!(last.contains(want), "{id}: opened {last}");
+        assert!(
+            !last.contains("vault/rulesets"),
+            "{id}: the decoy was opened: {last}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}

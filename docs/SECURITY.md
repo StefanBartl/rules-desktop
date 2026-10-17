@@ -18,7 +18,7 @@ session. This page says what is the rules hub's own.
 | A rule set is code | The hub never runs a rule's `check`; the page shows it as JSON in a `<pre>`. | `e2e/app.spec.ts` |
 | Rule text is text | Titles, texts, checks and sources are shown as text; hidden and bidi characters are made visible (`⟦U+202E⟧`). | `e2e/app.spec.ts` (a corpus of hostile rules: markup, script, `javascript:` links, event handlers, bidi) |
 | Data classes fail closed | An unclassified rule set is marked, never released; an unreadable `sources.json` stops the start. | `src/sources.rs`; `tests/cli.rs` |
-| Opening a file | `open` takes only an id. The file is the `source` the engine names, a plain file below `<vault>/rulesets` after links are resolved; the editor starts with a program and arguments, no shell. | `tests/routes.rs`; `src/editor.rs` |
+| Opening a file | `open` takes only an id. The place is the engine's to say (`rules.lua locate`: the file and the rule set that holds it; the name in `source` is not turned back into a place by the hub), and the file must be a plain file inside that rule set after links are resolved; the editor starts with a program and arguments, no shell. | `tests/routes.rs`; `src/editor.rs` |
 | The page's policy | `default-src 'none'`; scripts and styles from `self`; no inline script, no `unsafe-*`, Trusted Types. | `tests/routes.rs`; `e2e/app.spec.ts` |
 | Nothing of a rule set in the browser | The session is in `sessionStorage` of the tab; `localStorage` holds language, theme and the single-key switch. No cookie is ever set. | `e2e/app.spec.ts` |
 | Accessibility | axe reports nothing on every view, the detail and the palette, in the light and the dark scheme. | `e2e/app.spec.ts` |

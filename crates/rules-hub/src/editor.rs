@@ -147,38 +147,31 @@ impl FileOpener for TerminalOpener {
     }
 }
 
-/// The file of a rule as the engine named it in `source` (`lua/regeln/LUA.md`, below `rulesets/`),
-/// as a path inside `vault`, or why it is not one. The name must be a plain
-/// relative path, and what it leads to must be a file that lies in the vault
-/// once links are resolved: a link planted in a vault does not lead out of it.
+/// The file of a rule as the engine located it, checked against the ruleset the engine says it was loaded from:
+/// it must be a plain file (no link) that lies inside `root` once links are resolved (a ruleset that is a file is that
+/// file). A link planted in a ruleset does not lead out of it, and a file the engine did not load from `root` is not
+/// opened. What the file is called in a document (`source`) plays no part: the place comes from the engine.
 ///
 /// # Errors
 ///
 /// A short reason, no path.
-pub fn file_in_vault(vault: &Path, name: &str) -> Result<PathBuf, &'static str> {
-    use std::path::Component;
-    let relative = Path::new(name);
-    if name.is_empty()
-        || relative.is_absolute()
-        || !relative
-            .components()
-            .all(|c| matches!(c, Component::Normal(_)))
-    {
-        return Err("the rule names a file that is not a plain relative path");
+pub fn file_in_ruleset(root: &Path, file: &Path) -> Result<PathBuf, &'static str> {
+    if !file.is_absolute() || !root.is_absolute() {
+        return Err("the engine named a place that is not a whole path");
     }
-    let joined = vault.join(relative);
-    let meta = std::fs::symlink_metadata(&joined).map_err(|_| "the file is not there")?;
+    let meta = std::fs::symlink_metadata(file).map_err(|_| "the file is not there")?;
     if meta.file_type().is_symlink() || !meta.is_file() {
         return Err("the rule file is not a plain file");
     }
-    let real = joined.canonicalize().map_err(|_| "the file is not there")?;
-    let root = vault.canonicalize().map_err(|_| "the vault is not there")?;
-    if !real.starts_with(&root) {
-        return Err("the file lies outside the vault");
+    let real = file.canonicalize().map_err(|_| "the file is not there")?;
+    let real_root = root
+        .canonicalize()
+        .map_err(|_| "the rule set is not there")?;
+    if real != real_root && !real.starts_with(&real_root) {
+        return Err("the file lies outside its rule set");
     }
     Ok(strip_verbatim(real))
 }
-
 /// The longest plain path Windows takes without long-path support (`MAX_PATH` is 260 with the terminating NUL).
 const PLAIN_PATH_LIMIT: usize = 259;
 
@@ -268,29 +261,53 @@ mod tests {
         assert!(plan(&nvim, &file, "macos", &none).is_none());
     }
 
-    #[test]
-    fn a_file_name_that_climbs_or_names_a_drive_is_refused() {
-        let dir = std::env::temp_dir().join(format!("rules-desktop-editor-{}", std::process::id()));
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "rules-desktop-editor-{name}-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("a")).unwrap();
-        std::fs::write(dir.join("a").join("x.md"), "x").unwrap();
-        let ok = file_in_vault(&dir, "a/x.md").unwrap();
-        // What Neovim gets is a plain path, not the verbatim form Windows' canonicalize gives.
-        assert!(!ok.to_string_lossy().starts_with(r"\\?\"), "{ok:?}");
-        for bad in [
-            "",
-            "../x.md",
-            "a/../a/x.md",
-            "/etc/passwd",
-            "C:/x.md",
-            "a/nope.md",
-        ] {
-            assert!(file_in_vault(&dir, bad).is_err(), "{bad:?} was accepted");
-        }
-        // A folder is not a rule file.
-        assert!(file_in_vault(&dir, "a").is_err());
+        std::fs::create_dir_all(dir.join("set").join("a")).unwrap();
+        std::fs::create_dir_all(dir.join("other")).unwrap();
+        std::fs::write(dir.join("set").join("a").join("x.md"), "x").unwrap();
+        std::fs::write(dir.join("other").join("y.md"), "y").unwrap();
+        dir
     }
 
+    #[test]
+    fn a_file_of_the_ruleset_is_accepted_and_one_beside_it_is_not() {
+        let dir = scratch("in");
+        let root = dir.join("set");
+        let ok = file_in_ruleset(&root, &root.join("a").join("x.md")).unwrap();
+        // What Neovim gets is a plain path, not the verbatim form Windows' canonicalize gives.
+        assert!(!ok.to_string_lossy().starts_with(r"\\?\"), "{ok:?}");
+        // The engine names a file of another ruleset, one that is not there, a folder, a climb, a relative place.
+        for bad in [
+            dir.join("other").join("y.md"),
+            root.join("a").join("nope.md"),
+            root.join("a"),
+            root.join("a")
+                .join("..")
+                .join("..")
+                .join("other")
+                .join("y.md"),
+            PathBuf::from("a/x.md"),
+        ] {
+            assert!(
+                file_in_ruleset(&root, &bad).is_err(),
+                "{bad:?} was accepted"
+            );
+        }
+        assert!(file_in_ruleset(Path::new("set"), &root.join("a").join("x.md")).is_err());
+    }
+
+    #[test]
+    fn a_ruleset_that_is_a_file_is_that_file() {
+        let dir = scratch("file");
+        let file = dir.join("other").join("y.md");
+        assert!(file_in_ruleset(&file, &file).is_ok());
+        assert!(file_in_ruleset(&file, &dir.join("set").join("a").join("x.md")).is_err());
+    }
     #[test]
     fn the_verbatim_prefix_of_a_windows_path_goes_and_a_share_keeps_its_form() {
         assert_eq!(

@@ -169,8 +169,9 @@ async fn rule(State(st): State<Arc<Shared>>, RawQuery(query): RawQuery) -> Respo
 }
 
 /// `POST /api/rules/open` with `{"id": "<rule id>"}`: show the file of the rule in Neovim, at its line. The
-/// file is not named by the client: the `source` of the rule the engine reports is, and it must be a plain
-/// file inside `<vault>/rulesets` once links are resolved. Only an id of the held snapshot is asked for.
+/// file is not named by the client and not worked out from the `source` of the rule (a name, not a place): the
+/// engine says where it is and which loaded rule set holds it, and the file must be a plain file inside that rule
+/// set once links are resolved. Only an id of the held snapshot is asked for.
 async fn open(State(st): State<Arc<Shared>>, body: axum::body::Bytes) -> Response {
     let rt = st.rt();
     let Some(editor) = &rt.editor else {
@@ -213,18 +214,23 @@ async fn open(State(st): State<Arc<Shared>>, body: axum::body::Bytes) -> Respons
         Err(response) => return response,
     };
     let doc: Value = serde_json::from_str(&reply.text).unwrap_or(Value::Null);
-    let Some(source) = doc["rule"]["source"].as_str() else {
-        return error_body(
-            StatusCode::BAD_GATEWAY,
-            "engine_failed",
-            "the engine named no file for this rule",
-        );
-    };
     let line = doc["rule"]["line"]
         .as_u64()
         .and_then(|n| u32::try_from(n).ok())
         .filter(|n| *n > 0);
-    let file = match crate::editor::file_in_vault(&editor.rulesets, source) {
+    // The place is the engine's to say: the `source` of a document is a name, not a place.
+    let located = match editor.locator.locate(&id).await {
+        Ok(l) => l,
+        Err(why) => return error_body(StatusCode::BAD_GATEWAY, "engine_failed", why),
+    };
+    let Some(root) = &located.root else {
+        return error_body(
+            StatusCode::BAD_REQUEST,
+            "open_refused",
+            "the file is in none of the loaded rule sets",
+        );
+    };
+    let file = match crate::editor::file_in_ruleset(root, &located.file) {
         Ok(f) => f,
         Err(why) => return error_body(StatusCode::BAD_REQUEST, "open_refused", why),
     };

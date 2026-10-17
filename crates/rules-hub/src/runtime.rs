@@ -16,6 +16,7 @@ use tokio::task::JoinHandle;
 use crate::bodies::BodiesEngine;
 use crate::editor::FileOpener;
 use crate::engine::{Calls, Engine};
+use crate::locate::Locate;
 use crate::sources::{SourceFile, SourcePolicy};
 use crate::store::{self, Cached, RefreshOptions, SnapshotStore, StoreOptions, SHAPE};
 use crate::watch::{self, Hint, Watcher};
@@ -43,11 +44,11 @@ pub struct RulesRuntime {
     _watcher: Option<Watcher>,
 }
 
-/// How a rule file is shown in an editor, and where the rule sets are.
+/// How a rule file is shown in an editor, and how its place is found.
 #[derive(Clone)]
 pub struct Editor {
-    /// The folder `source` of a rule is relative to: `<vault>/rulesets`.
-    pub rulesets: PathBuf,
+    /// Says where the file of a rule is: the engine knows, the hub does not work it out from the name.
+    pub locator: Arc<dyn Locate>,
     pub opener: Arc<dyn FileOpener>,
 }
 
