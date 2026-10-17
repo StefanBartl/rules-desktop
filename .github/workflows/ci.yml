@@ -44,6 +44,15 @@ jobs:
           ref: ${{ steps.engine.outputs.lib_commit }}
           path: engine/lib.nvim
           persist-credentials: false
+      # The tests answer with copies of the engine's golden documents: they must be the pinned ones.
+      - name: The golden documents are those of the pinned engine
+        shell: bash
+        run: |
+          for f in engine/rules.nvim/schemas/rules-export/1/golden/*.json; do
+            cmp "$f" "crates/rules-hub/tests/fixtures/golden/$(basename "$f")"
+          done
+          test "$(ls engine/rules.nvim/schemas/rules-export/1/golden/*.json | wc -l)" = \
+            "$(ls crates/rules-hub/tests/fixtures/golden/*.json | wc -l)"
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           components: rustfmt, clippy

@@ -20,6 +20,7 @@ path = "src/lib.rs"
 appkit-core.workspace = true
 appkit-hub.workspace = true
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [dev-dependencies]

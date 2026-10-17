@@ -66,8 +66,11 @@ files hold one tag and one commit and that the tag still names it; `tools/check-
 colour function where the CSS of the page states a colour (declarations, style attributes and directives, SVG paint
 attributes), so those colours are tokens of the kit; scripts, `.ts` and `.svg` files and named colours are not looked at.
 The hub already starts on it and passes the kit's security matrix (`crates/rules-hub/tests/security.rs`); it has its
-own names (config folder `rules-desktop`, program `rules-hub`, port 17616, routes under `/api/rules/`) and one route
-behind a session, `about`. Its commands and views come with the read-only UI phase.
+own names (config folder `rules-desktop`, program `rules-hub`, port 17616, routes under `/api/rules/`). Behind a
+session it reads the engine (`rules-export/1`, read only): `snapshot` (the engine's document, its digest as `ETag`),
+`rule?id=` (only an id of the held snapshot is ever passed to the engine) and `about` (the app and the engine's
+version). The tests answer with copies of the engine's golden documents (`crates/rules-hub/tests/fixtures/golden`),
+which CI compares with the pinned engine. Its commands and views come with the rest of the read-only UI phase.
 
 To try a change of appkit before it has a tag, point the crates at a local checkout in a `.cargo/config.toml` that is
 not committed (`[patch."https://github.com/StefanBartl/appkit"]`). That rewrites `Cargo.lock`: restore it with

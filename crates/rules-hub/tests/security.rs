@@ -9,7 +9,10 @@ use appkit_core::identity::AppIdentity;
 use appkit_hub::{BoxFuture, HubStatus, Limits, RunningServer};
 use appkit_testkit::subject::{StartConfig, Subject};
 use appkit_testkit::subjects::DEMO_IDENTITY;
-use appkit_testkit::wire::{request, send, Reply};
+
+mod common;
+
+use common::{get, session};
 
 /// The rules hub, as the matrix starts it.
 pub struct Rules;
@@ -28,6 +31,7 @@ impl Subject for Rules {
             control_secret: cfg.control_secret,
             instance: cfg.instance,
             status: cfg.status,
+            engine: None,
         }))
     }
 
@@ -38,37 +42,6 @@ impl Subject for Rules {
 
 mod rules {
     appkit_testkit::security_matrix!(crate::Rules);
-}
-
-async fn get(server: &RunningServer, path: &str, auth: Option<&str>) -> Reply {
-    let host = format!("127.0.0.1:{}", server.addr().port());
-    let bearer = auth.map(|t| format!("Bearer {t}"));
-    let mut headers = vec![("Host", host.as_str())];
-    if let Some(b) = &bearer {
-        headers.push(("Authorization", b.as_str()));
-    }
-    send(server.addr(), request("GET", path, &headers, b"")).await
-}
-
-async fn post(server: &RunningServer, path: &str, auth: Option<&str>, body: &str) -> Reply {
-    let host = format!("127.0.0.1:{}", server.addr().port());
-    let origin = format!("http://{host}");
-    let len = body.len().to_string();
-    let bearer = auth.map(|t| format!("Bearer {t}"));
-    let mut headers = vec![
-        ("Host", host.as_str()),
-        ("Origin", origin.as_str()),
-        ("Content-Type", "application/json"),
-        ("Content-Length", len.as_str()),
-    ];
-    if let Some(b) = &bearer {
-        headers.push(("Authorization", b.as_str()));
-    }
-    send(
-        server.addr(),
-        request("POST", path, &headers, body.as_bytes()),
-    )
-    .await
 }
 
 #[tokio::test]
@@ -98,17 +71,15 @@ async fn about_names_the_app_to_a_session_and_to_nobody_else() {
     let about = rules_hub::IDENTITY.route("about");
     assert_eq!(get(&server, &about, None).await.status, 401);
 
-    let code = post(&server, "/api/control/pair", Some(&control.to_hex()), "{}").await;
-    assert_eq!(code.status, 200, "{code:?}");
-    let body = format!(r#"{{"code":"{}"}}"#, code.json()["code"].as_str().unwrap());
-    let token = post(&server, "/auth/exchange", None, &body).await;
-    assert_eq!(token.status, 200, "{token:?}");
-    let token = token.json()["token"].as_str().unwrap().to_owned();
+    let token = session(&server, &control).await;
 
     let r = get(&server, &about, Some(&token)).await;
     assert_eq!(r.status, 200, "{r:?}");
     assert_eq!(r.json()["app"], "rules-desktop");
     assert_eq!(r.json()["version"], rules_hub::version());
+    // No engine: the app is still described, and nothing claims an engine that hangs.
+    assert!(r.json()["engine"].is_null(), "{r:?}");
+    assert!(r.json()["engine_problem"].is_null(), "{r:?}");
 }
 
 /// The names of the tasks hub (`tasks_hub::IDENTITY` in tasks-desktop), copied: tasks-hub is not a
