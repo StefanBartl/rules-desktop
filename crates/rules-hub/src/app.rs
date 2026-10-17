@@ -48,7 +48,13 @@ fn wanted_port(
             .filter(|p| *p >= 1024)
             .ok_or_else(|| format!("{port_var} is not a port from 1024 to 65535: {text:?}"));
     }
-    Ok(file.port.unwrap_or(IDENTITY.default_port))
+    match file.port {
+        Some(p) if p < 1024 => Err(format!(
+            "port in config.json is not a port from 1024 to 65535: {p}"
+        )),
+        Some(p) => Ok(p),
+        None => Ok(IDENTITY.default_port),
+    }
 }
 
 /// Is a hub of this app running according to `hub.json`? It is only believed when the process on
@@ -159,7 +165,7 @@ pub async fn serve(opts: ServeOptions) -> Result<(), String> {
         );
     }
 
-    let state = engine_state(&file, &env).await;
+    let state = engine_state(&file.effective(), &env).await;
     if let Some(note) = &state.note {
         eprintln!("{note}");
     }

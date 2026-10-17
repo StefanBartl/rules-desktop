@@ -46,24 +46,45 @@ fn command(config: &Path, args: &[&str]) -> Command {
 }
 
 /// The program to its end. One that has not ended after a minute is a hub that was meant to refuse
-/// and runs: it is killed and the test fails, instead of waiting for ever.
+/// and runs: it is killed and the test fails, instead of waiting for ever. Its output is read while
+/// it runs, so a program that writes a lot cannot block on a full pipe.
 fn run(config: &Path, args: &[&str]) -> Output {
+    use std::io::Read;
     let mut child = command(config, args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("the program starts");
+    let mut out = child.stdout.take().unwrap();
+    let mut err = child.stderr.take().unwrap();
+    let out = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        let _ = out.read_to_end(&mut v);
+        v
+    });
+    let err = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        let _ = err.read_to_end(&mut v);
+        v
+    });
     let until = Instant::now() + Duration::from_secs(60);
-    while child.try_wait().expect("wait").is_none() {
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            break status;
+        }
         if Instant::now() > until {
             let _ = child.kill();
+            let _ = child.wait();
             panic!("{args:?} did not end");
         }
         std::thread::sleep(Duration::from_millis(50));
+    };
+    Output {
+        status,
+        stdout: out.join().unwrap(),
+        stderr: err.join().unwrap(),
     }
-    child.wait_with_output().expect("output")
 }
-
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
@@ -147,6 +168,7 @@ impl Drop for Running {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
@@ -156,7 +178,10 @@ fn free_port() -> u16 {
 }
 
 fn serve(name: &str, sources: Option<&str>) -> Running {
-    let dir = config_dir(name, sources);
+    serve_in(config_dir(name, sources))
+}
+
+fn serve_in(dir: PathBuf) -> Running {
     let port = free_port();
     let child = command(&dir, &["serve", "--port", &port.to_string()])
         .stdout(Stdio::null())
@@ -266,4 +291,88 @@ async fn a_second_serve_in_the_same_config_folder_does_not_start() {
         "{}",
         text(&out.stderr)
     );
+}
+
+/// The login entry and the desktop link of the machine are not the tests': the program leaves them
+/// alone when this is set (the kit's switch).
+fn without_system_entries(mut c: Command) -> Command {
+    c.env("RULES_DESKTOP_NO_LOGIN_SYNC", "1");
+    c
+}
+
+#[test]
+fn stop_without_a_hub_says_so_and_is_no_error() {
+    let out = run(&config_dir("stop", None), &["stop"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(text(&out.stdout).contains("no hub is running"));
+}
+
+#[test]
+fn uninstall_purges_the_files_of_the_app_and_only_those() {
+    let dir = config_dir("uninstall", Some(CLASSES));
+    std::fs::write(dir.join("keep.txt"), "mine").unwrap();
+    let out = without_system_entries(command(&dir, &["uninstall", "--purge-settings"]))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(!dir.join("sources.json").exists(), "sources.json stayed");
+    assert!(
+        dir.join("keep.txt").exists(),
+        "a file of the person was removed"
+    );
+    let said = text(&out.stdout);
+    assert!(said.contains("scripts/uninstall"), "{said}");
+    // The script it names is in the repository.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts");
+    assert!(root.join("uninstall.ps1").is_file() && root.join("uninstall.sh").is_file());
+
+    // Without the switch for the purge, the settings stay.
+    let dir = config_dir("uninstall-keep", Some(CLASSES));
+    let out = without_system_entries(command(&dir, &["uninstall"]))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(dir.join("sources.json").exists());
+}
+
+#[test]
+fn install_copies_the_program_to_the_install_folder_and_nowhere_else() {
+    let dir = config_dir("install", None);
+    let target = dir.join("bin");
+    let out = without_system_entries(command(&dir, &["install"]))
+        .env("RULES_DESKTOP_INSTALL_DIR", &target)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let installed = target.join(rules_hub::IDENTITY.program_file());
+    assert!(installed.is_file(), "{}", text(&out.stdout));
+    let version = Command::new(&installed).arg("--version").output().unwrap();
+    assert_eq!(text(&version.stdout).trim(), rules_hub::version_line());
+}
+
+#[tokio::test]
+async fn the_active_vault_of_config_json_is_the_one_that_is_read() {
+    // The main vault of the file does not exist; the active one is the fixture. Reading the main
+    // vault would leave the engine not ready.
+    let dir = config_dir("active", Some(CLASSES));
+    let settings = serde_json::json!({
+        "vault": dir.join("no-such-vault"),
+        "vaults": [{ "name": "fixture", "path": fixture_vault() }],
+        "active": "fixture",
+    });
+    std::fs::write(dir.join("config.json"), settings.to_string()).unwrap();
+    let hub = serve_in(dir);
+    let token = token(&hub).await;
+    let (status, hello) = get(&hub, &token, "/api/rules/hello").await;
+    assert_eq!(status, 200);
+    assert_eq!(hello["engine"]["ready"], true, "{hello}");
+}
+
+#[test]
+fn a_port_below_1024_in_config_json_stops_the_start() {
+    let dir = config_dir("lowport", None);
+    std::fs::write(dir.join("config.json"), r#"{"port":80}"#).unwrap();
+    let out = run(&dir, &["serve"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(text(&out.stderr).contains("1024"), "{}", text(&out.stderr));
 }

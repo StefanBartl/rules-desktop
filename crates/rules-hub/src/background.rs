@@ -2,15 +2,10 @@
 //! is the kit's, this module states what is the rules hub's own.
 
 use std::future::Future;
-use std::path::PathBuf;
 use std::pin::Pin;
 
 use appkit_hub::background::Background;
-pub use appkit_hub::background::{
-    run_command, start_from, Autostart, InstallOptions, UninstallOptions,
-};
-
-use appkit_hub::env::Env;
+pub use appkit_hub::background::{Autostart, InstallOptions, UninstallOptions};
 
 /// The files of the rules hub in the config folder besides those every hub has.
 const EXTRA_FILES: [&str; 1] = ["sources.json"];
@@ -19,7 +14,7 @@ const EXTRA_FILES: [&str; 1] = ["sources.json"];
 pub(crate) const APP: Background<'static> = Background {
     login: crate::LOGIN,
     extra_files: &EXTRA_FILES,
-    uninstall_script: "scripts/uninstall",
+    uninstall_script: "scripts/uninstall.ps1 or scripts/uninstall.sh",
 };
 
 /// Start a hub in the background unless one runs. Returns what to print.
@@ -47,15 +42,6 @@ pub async fn stop() -> Result<String, String> {
 /// A text for the person at the terminal.
 pub fn autostart(what: Autostart) -> Result<String, String> {
     appkit_hub::background::autostart(&APP, what)
-}
-
-/// Where `install` puts this program.
-///
-/// # Errors
-///
-/// The reason there is no install folder.
-pub fn installed_program(env: &Env) -> Result<PathBuf, String> {
-    appkit_hub::background::installed_program(&APP, env)
 }
 
 /// Copy this program to a fixed place and start the hub from there again when one was running.
