@@ -1,4 +1,5 @@
-//! What the hub keeps while it runs: the status `hello` reports, the engine and the snapshot.
+//! What the hub keeps while it runs: the status `hello` reports, the engine, the snapshot and the
+//! data classes of this device.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -9,6 +10,7 @@ use axum::body::Bytes;
 use serde::Deserialize;
 
 use crate::engine::Engine;
+use crate::sources::{SourceFile, SourcePolicy};
 use crate::store::{Cached, SnapshotStore, StoreOptions, SHAPE};
 
 /// What the hub keeps for the vault it reads.
@@ -16,8 +18,17 @@ pub struct RulesRuntime {
     pub(crate) status: HubStatus,
     pub(crate) engine: Option<Arc<dyn Engine>>,
     pub(crate) store: Arc<SnapshotStore>,
-    /// The ids of the held snapshot, with the text they were read from.
-    ids: Mutex<Option<(Bytes, Arc<HashSet<String>>)>>,
+    /// The data classes of the rule sets on this device (`sources.json`).
+    pub(crate) sources: Arc<SourcePolicy>,
+    /// What was read of the held snapshot, with the text it was read from.
+    held: Mutex<Option<(Bytes, Arc<Held>)>>,
+}
+
+/// What the routes read of a snapshot: the ids of its rules and its files.
+pub(crate) struct Held {
+    pub(crate) ids: HashSet<String>,
+    /// `None` when the snapshot has no `sources`: the classes of its files are not known.
+    pub(crate) files: Option<Vec<SourceFile>>,
 }
 
 impl Runtime for RulesRuntime {
@@ -30,10 +41,12 @@ impl Runtime for RulesRuntime {
     fn stop(&self) {}
 }
 
-/// A snapshot read for the ids of its rules and nothing else.
+/// A snapshot read for the ids of its rules and its files, and nothing else.
 #[derive(Deserialize)]
-struct SnapshotIds {
+struct SnapshotParts {
     rules: Vec<RuleId>,
+    #[serde(default)]
+    sources: Option<Vec<SourceFile>>,
 }
 
 #[derive(Deserialize)]
@@ -45,6 +58,7 @@ impl RulesRuntime {
     pub(crate) fn new(
         engine: Option<Arc<dyn Engine>>,
         status: HubStatus,
+        sources: Arc<SourcePolicy>,
         max_age: Option<Duration>,
     ) -> Self {
         let store = SnapshotStore::new(
@@ -59,27 +73,31 @@ impl RulesRuntime {
             status,
             engine,
             store,
-            ids: Mutex::new(None),
+            sources,
+            held: Mutex::new(None),
         }
     }
 
-    /// The ids of the rules of a snapshot; `None` when its text is not a snapshot. Read once for
-    /// each snapshot the store holds: the text is kept with them, so the same allocation means the
-    /// same document.
-    pub(crate) fn rule_ids(&self, cached: &Cached) -> Option<Arc<HashSet<String>>> {
+    /// What the routes read of a snapshot; `None` when its text is not a snapshot with a list of
+    /// rules. Read once for each snapshot the store holds: the text is kept with it, so the same
+    /// allocation means the same document.
+    pub(crate) fn held(&self, cached: &Cached) -> Option<Arc<Held>> {
         let mut held = self
-            .ids
+            .held
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((text, ids)) = held.as_ref()
+        if let Some((text, parts)) = held.as_ref()
             && text.as_ptr() == cached.text.as_ptr()
             && text.len() == cached.text.len()
         {
-            return Some(Arc::clone(ids));
+            return Some(Arc::clone(parts));
         }
-        let doc: SnapshotIds = serde_json::from_slice(&cached.text).ok()?;
-        let ids: Arc<HashSet<String>> = Arc::new(doc.rules.into_iter().map(|r| r.id).collect());
-        *held = Some((cached.text.clone(), Arc::clone(&ids)));
-        Some(ids)
+        let doc: SnapshotParts = serde_json::from_slice(&cached.text).ok()?;
+        let parts = Arc::new(Held {
+            ids: doc.rules.into_iter().map(|r| r.id).collect(),
+            files: doc.sources,
+        });
+        *held = Some((cached.text.clone(), Arc::clone(&parts)));
+        Some(parts)
     }
 }

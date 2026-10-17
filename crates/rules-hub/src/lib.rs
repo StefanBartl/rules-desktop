@@ -1,5 +1,6 @@
 //! The hub of rules-desktop, on `appkit-hub`: its names, the engine seam to rules.nvim
-//! (`rules-export/1`, read only) and the routes a session reads (`snapshot`, `rule`, `about`).
+//! (`rules-export/1`, read only), the data classes of this device (`sources.json`) and the routes
+//! a session reads (`snapshot`, `rule`, `sources`, `about`).
 //! The page, the live updates, the search and the commands of `tasks-hub` arrive with the later
 //! steps of the read-only UI phase.
 
@@ -15,12 +16,14 @@ mod answer;
 pub mod engine;
 mod routes;
 mod runtime;
+pub mod sources;
 pub mod store;
 
 pub use routes::{MakeRoute, Shared, MAX_ID_BYTES, ROUTES};
 pub use runtime::RulesRuntime;
 
 use engine::Engine;
+use sources::SourcePolicy;
 
 /// The names of the app: its config folder, its program, its variables, its port and its routes.
 pub const IDENTITY: AppIdentity = AppIdentity {
@@ -69,6 +72,9 @@ pub struct Start {
     /// The engine the routes ask; `None`: the hub is up and every data route says the engine is
     /// not ready.
     pub engine: Option<Arc<dyn Engine>>,
+    /// The data classes of this device, loaded before the start: a `sources.json` that cannot be
+    /// used stops the start there ([`SourcePolicy::load`]). The default classifies nothing.
+    pub sources: Arc<SourcePolicy>,
 }
 
 /// Starts the hub.
@@ -90,7 +96,7 @@ pub async fn start(s: Start) -> std::io::Result<RunningServer> {
             version: version(),
             guard_rules: GuardRules::new(IDENTITY.route("hello"), []),
             ui: Arc::new(NoPages),
-            runtime: RulesRuntime::new(s.engine, s.status, max_age),
+            runtime: RulesRuntime::new(s.engine, s.status, s.sources, max_age),
             // There is one vault and no list to choose from, so this is never called.
             build: Arc::new(move |()| {
                 RulesRuntime::new(
@@ -100,6 +106,7 @@ pub async fn start(s: Start) -> std::io::Result<RunningServer> {
                         problem: None,
                         capabilities: Vec::new(),
                     },
+                    Arc::default(),
                     max_age,
                 )
             }),

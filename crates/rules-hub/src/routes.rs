@@ -31,6 +31,7 @@ pub type MakeRoute = fn() -> MethodRouter<Arc<Shared>>;
 pub const ROUTES: &[(&str, MakeRoute)] = &[
     ("snapshot", || get(snapshot)),
     ("rule", || get(rule)),
+    ("sources", || get(sources)),
     ("about", || get(about)),
 ];
 
@@ -147,21 +148,50 @@ async fn rule(State(st): State<Arc<Shared>>, RawQuery(query): RawQuery) -> Respo
         Ok(c) => c,
         Err(error) => return engine_failure(error),
     };
-    let Some(ids) = rt.rule_ids(&cached) else {
-        eprintln!("engine: the snapshot has no list of rules");
-        return error_body(
-            StatusCode::BAD_GATEWAY,
-            "engine_failed",
-            "the engine could not answer",
-        );
+    let Some(held) = rt.held(&cached) else {
+        return no_snapshot();
     };
-    if !ids.contains(&id) {
+    if !held.ids.contains(&id) {
         return error_body(StatusCode::NOT_FOUND, "not_found", "no rule with this id");
     }
     match ask(&rt, Calls::Rule, Some(&json!({ "id": id }))).await {
         Ok(reply) => json_response(StatusCode::OK, reply.text, None),
         Err(response) => response,
     }
+}
+
+/// What a route that reads the held snapshot answers when it is not one.
+fn no_snapshot() -> Response {
+    eprintln!("engine: the snapshot has no list of rules or of files");
+    error_body(
+        StatusCode::BAD_GATEWAY,
+        "engine_failed",
+        "the engine could not answer",
+    )
+}
+
+/// `GET /api/rules/sources`: every file of the held snapshot with the class it is shown with
+/// (`sources.json` of this device), computed here and asked of no engine. The page takes the class
+/// of a rule from this list by its `source` and works out none itself.
+async fn sources(State(st): State<Arc<Shared>>, RawQuery(query): RawQuery) -> Response {
+    if let Some(response) = no_query(query.as_deref()) {
+        return response;
+    }
+    let rt = st.rt();
+    if !rt.store.has_engine() {
+        return engine_unavailable(&rt);
+    }
+    let cached = match rt.store.current().await {
+        Ok(c) => c,
+        Err(error) => return engine_failure(error),
+    };
+    // A snapshot without its files is not answered with an empty list: that would read as
+    // "nothing to classify" instead of "not known".
+    let Some(files) = rt.held(&cached).and_then(|h| h.files.clone()) else {
+        return no_snapshot();
+    };
+    let body = rt.sources.document(&files);
+    json_response(StatusCode::OK, body.to_string(), None)
 }
 
 /// `GET /api/rules/about`: what this build is and which engine it runs. Without an engine, or with
@@ -243,7 +273,7 @@ mod tests {
             assert!(IDENTITY.route(name).starts_with("/api/rules/"), "{name}");
             assert_eq!(names.iter().filter(|n| *n == name).count(), 1, "{name}");
         }
-        assert_eq!(names, ["snapshot", "rule", "about"]);
+        assert_eq!(names, ["snapshot", "rule", "sources", "about"]);
     }
 
     #[test]

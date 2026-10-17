@@ -10,6 +10,7 @@ use std::time::Duration;
 use appkit_core::authn::{ManualClock, Secret, CODE_BYTES, TOKEN_BYTES};
 use appkit_hub::engine::{CallFuture, Engine, EngineError, EngineRefusal, Method, Reply};
 use appkit_hub::{HubStatus, Limits, RunningServer};
+use rules_hub::sources::{Class, SourcePolicy};
 use serde_json::{json, Value};
 
 mod common;
@@ -118,6 +119,14 @@ fn ready() -> HubStatus {
 }
 
 async fn start_with(engine: Option<Arc<FakeEngine>>, max_age: Option<Duration>) -> Hub {
+    start_classified(engine, max_age, Arc::default()).await
+}
+
+async fn start_classified(
+    engine: Option<Arc<FakeEngine>>,
+    max_age: Option<Duration>,
+    sources: Arc<SourcePolicy>,
+) -> Hub {
     let control = Secret::generate(TOKEN_BYTES).unwrap();
     let server = rules_hub::start(rules_hub::Start {
         addr: "127.0.0.1:0".parse().unwrap(),
@@ -139,6 +148,7 @@ async fn start_with(engine: Option<Arc<FakeEngine>>, max_age: Option<Duration>) 
             }
         },
         engine: engine.map(|e| e as Arc<dyn Engine>),
+        sources,
     })
     .await
     .expect("the hub starts");
@@ -177,6 +187,7 @@ async fn every_route_of_the_table_is_served_to_a_session_and_to_nobody_else() {
     assert_eq!(seen.get("snapshot"), Some(&200));
     // `rule` without an id is a bad query, told by the route.
     assert_eq!(seen.get("rule"), Some(&400));
+    assert_eq!(seen.get("sources"), Some(&200));
     assert_eq!(seen.get("about"), Some(&200));
 }
 
@@ -338,7 +349,11 @@ async fn a_snapshot_without_a_list_of_rules_asks_no_rule() {
 #[tokio::test]
 async fn without_an_engine_the_data_routes_say_so_and_about_still_answers() {
     let hub = start_with(None, None).await;
-    for path in [route("snapshot"), format!("{}?id=DEP-01", route("rule"))] {
+    for path in [
+        route("snapshot"),
+        format!("{}?id=DEP-01", route("rule")),
+        route("sources"),
+    ] {
         let r = hub.get(&path).await;
         assert_eq!(r.status, 503, "{path}: {r:?}");
         assert_eq!(r.json()["error"]["code"], "engine_unavailable");
@@ -396,4 +411,158 @@ async fn the_probe_accepts_the_golden_hello() {
     for needed in rules_hub::engine::REQUIRED_CAPABILITIES {
         assert!(info.capabilities.iter().any(|c| c == needed), "{needed}");
     }
+}
+
+fn policy(keys: &[(&str, Class)], default: Option<Class>) -> Arc<SourcePolicy> {
+    Arc::new(
+        SourcePolicy::new(keys.iter().map(|(k, c)| ((*k).to_owned(), *c)))
+            .unwrap()
+            .with_default(default),
+    )
+}
+
+/// The golden snapshot with other files and one rule in each.
+fn snapshot_with_files(paths: &[&str]) -> String {
+    let mut doc: Value = serde_json::from_str(SNAPSHOT).unwrap();
+    doc["sources"] = paths
+        .iter()
+        .map(|p| json!({ "etag": "sha256:0000000000000000", "path": p, "rules": 1 }))
+        .collect();
+    doc["digest"] = json!("sha256:3333333333333333");
+    doc.to_string()
+}
+
+#[tokio::test]
+async fn without_sources_json_every_file_is_unclassified() {
+    let engine = FakeEngine::new();
+    let hub = start(&engine).await;
+    let r = hub.get(&route("sources")).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let doc = r.json();
+    assert_eq!(doc["kind"], "hub.sources");
+    assert_eq!(
+        doc["files"],
+        json!([
+            { "path": "Checklists/DEP.md", "data_class": "unclassified", "rules": 2, "key": null },
+            { "path": "Checklists/LUA.md", "data_class": "unclassified", "rules": 1, "key": null },
+            { "path": "Checklists/_rules/ERR/ERR-100.md", "data_class": "unclassified",
+              "rules": 1, "key": null },
+        ])
+    );
+    assert_eq!(doc["keys"], json!([]));
+    assert_eq!(doc["unclassified"].as_array().unwrap().len(), 3);
+    assert_eq!(doc["private"], json!([]));
+    // Computed from the held snapshot: one read for both answers, nothing else asked.
+    assert_eq!(hub.get(&route("sources")).await.status, 200);
+    assert_eq!(engine.count("snapshot"), 1);
+    assert_eq!(engine.asked.lock().unwrap().len(), 1);
+
+    let with_query = hub.get(&format!("{}?x=1", route("sources"))).await;
+    assert_eq!(with_query.status, 400, "{with_query:?}");
+}
+
+#[tokio::test]
+async fn sources_gives_each_file_its_class_and_the_strictest_of_two_keys() {
+    let engine = FakeEngine::new();
+    *engine.snapshot.lock().unwrap() = snapshot_with_files(&[
+        "wkdbook-Lua/Checklists/DEP.md",
+        "wkdbook-Lua/README.md",
+        "Checklists#2/DEP.md",
+        "lua/DEP.md",
+        "native/REL.md",
+    ]);
+    let classes = policy(
+        &[
+            ("wkdbook-Lua", Class::Public),
+            ("wkdbook-Lua/Checklists", Class::Private),
+            ("Checklists", Class::Public),
+            ("lua", Class::Internal),
+        ],
+        Some(Class::Internal),
+    );
+    let hub = start_classified(Some(Arc::clone(&engine)), None, classes).await;
+    let r = hub.get(&route("sources")).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let doc = r.json();
+    let shown: Vec<(&str, &str, Option<&str>)> = doc["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["path"].as_str().unwrap(),
+                f["data_class"].as_str().unwrap(),
+                f["key"].as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            // Two keys count, the strictest wins.
+            (
+                "wkdbook-Lua/Checklists/DEP.md",
+                "private",
+                Some("wkdbook-Lua/Checklists")
+            ),
+            ("wkdbook-Lua/README.md", "public", Some("wkdbook-Lua")),
+            // A numbered name, not even the default.
+            ("Checklists#2/DEP.md", "unclassified", None),
+            ("lua/DEP.md", "internal", Some("lua")),
+            ("native/REL.md", "internal", None),
+        ]
+    );
+    assert_eq!(doc["unclassified"], json!(["Checklists#2/DEP.md"]));
+    assert_eq!(doc["private"], json!(["wkdbook-Lua/Checklists/DEP.md"]));
+    assert_eq!(
+        doc["keys"],
+        json!([
+            { "key": "Checklists", "class": "public", "files": 1 },
+            { "key": "lua", "class": "internal", "files": 1 },
+            { "key": "wkdbook-Lua", "class": "public", "files": 2 },
+            { "key": "wkdbook-Lua/Checklists", "class": "private", "files": 1 },
+        ])
+    );
+}
+
+#[tokio::test]
+async fn a_snapshot_without_its_files_is_no_empty_list() {
+    let engine = FakeEngine::new();
+    let mut doc: Value = serde_json::from_str(SNAPSHOT).unwrap();
+    doc.as_object_mut().unwrap().remove("sources");
+    doc["digest"] = json!("sha256:4444444444444444");
+    *engine.snapshot.lock().unwrap() = doc.to_string();
+    let hub = start_classified(
+        Some(Arc::clone(&engine)),
+        None,
+        policy(&[], Some(Class::Public)),
+    )
+    .await;
+    let r = hub.get(&route("sources")).await;
+    assert_eq!(r.status, 502, "{r:?}");
+    assert_eq!(r.json()["error"]["code"], "engine_failed");
+    // The rules of that snapshot are still read.
+    let rule = hub.get(&format!("{}?id=DEP-01", route("rule"))).await;
+    assert_eq!(rule.status, 200, "{rule:?}");
+}
+
+#[test]
+fn a_sources_json_with_a_hash_key_stops_the_start_before_it_begins() {
+    let dir = std::env::temp_dir().join(format!("rules-hub-routes-hash-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        rules_hub::sources::path(&dir),
+        r#"{"schema":1,"sources":{"Checklists#2":{"class":"public"}}}"#,
+    )
+    .unwrap();
+    assert!(SourcePolicy::load(&dir).is_err());
+    std::fs::write(rules_hub::sources::path(&dir), "{").unwrap();
+    assert!(SourcePolicy::load(&dir).is_err());
+    std::fs::write(
+        rules_hub::sources::path(&dir),
+        r#"{"schema":1,"sources":{"Checklists":{"class":"public"}}}"#,
+    )
+    .unwrap();
+    assert_eq!(SourcePolicy::load(&dir).unwrap().len(), 1);
 }
