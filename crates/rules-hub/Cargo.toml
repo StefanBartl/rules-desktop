@@ -16,12 +16,17 @@ workspace = true
 name = "rules_hub"
 path = "src/lib.rs"
 
+[[bin]]
+name = "rules-hub"
+path = "src/main.rs"
+
 [dependencies]
 appkit-core.workspace = true
 appkit-hub.workspace = true
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "net", "time", "macros", "signal"] }
 
 [dev-dependencies]
 appkit-testkit.workspace = true

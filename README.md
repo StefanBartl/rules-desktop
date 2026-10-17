@@ -56,6 +56,27 @@ docs/               releasing (usage and security later)
 engine.lock         the rules.nvim and lib.nvim commits this is built and tested against
 ```
 
+## Running the hub
+
+The program is `rules-hub`; its verbs are those of `tasks-hub`:
+
+```
+rules-hub serve [--port N]      run the hub until Ctrl-C
+rules-hub start [--open]        run it in the background (log in the config folder)
+rules-hub stop                  stop that hub
+rules-hub open [--launch]       print (or open) a one-time pairing link
+rules-hub autostart on|off|status
+rules-hub install [--autostart] [--shortcut]
+rules-hub uninstall [--purge-settings]
+```
+
+It needs a Neovim (0.12 or newer), a rules.nvim checkout and the rules vault: `RULES_NVIM`,
+`RULES_ENGINE_DIR` (else `$REPOS_DIR/rules.nvim`) and `RULES_VAULT`, or the same as keys of
+`config.json` in the config folder (`%APPDATA%\rules-desktop`, `~/.config/rules-desktop`;
+`RULES_DESKTOP_CONFIG_DIR` moves it). The default port is 17616 (`RULES_DESKTOP_PORT`). Which rule set
+may be shown as what is decided per device in `sources.json` in the same folder; a rule set without an
+entry is shown as unclassified, and a `sources.json` that cannot be read stops the start.
+
 ## The shared kit
 
 The server guard, sessions, pairing, limits and the login entry come from

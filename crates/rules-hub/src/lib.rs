@@ -1,8 +1,9 @@
 //! The hub of rules-desktop, on `appkit-hub`: its names, the engine seam to rules.nvim
 //! (`rules-export/1`, read only), the data classes of this device (`sources.json`) and the routes
 //! a session reads (`snapshot`, `rule`, `sources`, `about`).
-//! The page, the live updates, the search and the commands of `tasks-hub` arrive with the later
-//! steps of the read-only UI phase.
+//! The commands of the program (`serve`, `start`, `stop`, `open`, `autostart`, `install`,
+//! `uninstall`) are in `app` and `background`. The page, the live updates and the search arrive
+//! with the later steps of the read-only UI phase.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, LazyLock};
@@ -13,6 +14,8 @@ use appkit_core::identity::AppIdentity;
 use appkit_hub::{serve, GuardRules, HubStatus, Limits, Page, Pages, RunningServer, ServeParts};
 
 mod answer;
+pub mod app;
+pub mod background;
 pub mod engine;
 mod routes;
 mod runtime;
@@ -21,6 +24,8 @@ pub mod store;
 
 pub use routes::{MakeRoute, Shared, MAX_ID_BYTES, ROUTES};
 pub use runtime::RulesRuntime;
+
+pub use appkit_hub::{client, loginitems};
 
 use engine::Engine;
 use sources::SourcePolicy;
@@ -35,10 +40,22 @@ pub const IDENTITY: AppIdentity = AppIdentity {
     route_ns: "rules",
 };
 
+/// What the login entries and the launcher say about this app.
+pub const LOGIN: appkit_hub::loginitems::LoginApp<'static> = appkit_hub::loginitems::LoginApp {
+    identity: &IDENTITY,
+    summary: "the rule set",
+};
+
 /// The version of this build, as `rules-hub --version` and `about` say it.
 #[must_use]
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// The line `--version` prints: `rules-hub 0.0.0`.
+#[must_use]
+pub fn version_line() -> String {
+    format!("{} {}", IDENTITY.binary, version())
 }
 
 /// No page yet: the placeholder of the core is served.
@@ -73,8 +90,8 @@ pub struct Start {
     /// not ready.
     pub engine: Option<Arc<dyn Engine>>,
     /// The data classes of this device. The caller loads them with [`SourcePolicy::load`] before
-    /// it starts the hub and must not start it when that fails; the program has no such caller yet
-    /// (`serve` comes later). The default classifies nothing.
+    /// it starts the hub and must not start it when that fails (`app::serve` stops the start).
+    /// The default classifies nothing.
     pub sources: Arc<SourcePolicy>,
 }
 

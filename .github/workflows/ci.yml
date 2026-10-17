@@ -57,6 +57,11 @@ jobs:
       - name: The contract types of the page are those of the pinned engine
         shell: bash
         run: cmp engine/rules.nvim/schemas/rules-export/1/rules-export.d.ts ui/src/lib/contract.d.ts
+      # The tests of the program start the engine in a real Neovim.
+      - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1
+        with:
+          neovim: true
+          version: v0.12.2
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           components: rustfmt, clippy
