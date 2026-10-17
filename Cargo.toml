@@ -9,6 +9,13 @@ license = "MIT"
 authors = ["Stefan Bartl"]
 repository = "https://github.com/StefanBartl/rules-desktop"
 
+# The kit both apps are built on, pinned by its tag (tools/check-appkit-pin.py checks that the tag
+# still names the commit in Cargo.lock).
+[workspace.dependencies]
+appkit-core = { git = "https://github.com/StefanBartl/appkit", tag = "v0.2.0" }
+appkit-hub = { git = "https://github.com/StefanBartl/appkit", tag = "v0.2.0" }
+appkit-testkit = { git = "https://github.com/StefanBartl/appkit", tag = "v0.2.0" }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

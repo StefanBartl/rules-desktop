@@ -9,6 +9,8 @@ dist/
 /sources.json
 /hub.json
 *.local.*
+# A [patch] onto a local appkit checkout
+/.cargo/config.toml
 
 # Editor / OS
 .DS_Store

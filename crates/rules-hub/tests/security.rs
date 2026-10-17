@@ -1,0 +1,143 @@
+//! The security matrix of appkit (guard, pairing, limits), run for the rules hub, and what the hub
+//! answers of its own.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use appkit_core::authn::{ManualClock, Secret, CODE_BYTES, TOKEN_BYTES};
+use appkit_core::identity::AppIdentity;
+use appkit_hub::{BoxFuture, HubStatus, Limits, RunningServer};
+use appkit_testkit::subject::{StartConfig, Subject};
+use appkit_testkit::subjects::DEMO_IDENTITY;
+use appkit_testkit::wire::{request, send, Reply};
+
+/// The rules hub, as the matrix starts it.
+pub struct Rules;
+
+impl Subject for Rules {
+    fn identity(&self) -> &'static AppIdentity {
+        &rules_hub::IDENTITY
+    }
+
+    fn start(&self, cfg: StartConfig) -> BoxFuture<'_, std::io::Result<RunningServer>> {
+        Box::pin(rules_hub::start(rules_hub::Start {
+            addr: cfg.addr,
+            limits: cfg.limits,
+            clock: cfg.clock,
+            pairing_ttl: cfg.pairing_ttl,
+            control_secret: cfg.control_secret,
+            instance: cfg.instance,
+            status: cfg.status,
+        }))
+    }
+
+    fn data_routes(&self) -> Vec<&'static str> {
+        rules_hub::DATA_ROUTES.to_vec()
+    }
+}
+
+mod rules {
+    appkit_testkit::security_matrix!(crate::Rules);
+}
+
+async fn get(server: &RunningServer, path: &str, auth: Option<&str>) -> Reply {
+    let host = format!("127.0.0.1:{}", server.addr().port());
+    let bearer = auth.map(|t| format!("Bearer {t}"));
+    let mut headers = vec![("Host", host.as_str())];
+    if let Some(b) = &bearer {
+        headers.push(("Authorization", b.as_str()));
+    }
+    send(server.addr(), request("GET", path, &headers, b"")).await
+}
+
+async fn post(server: &RunningServer, path: &str, auth: Option<&str>, body: &str) -> Reply {
+    let host = format!("127.0.0.1:{}", server.addr().port());
+    let origin = format!("http://{host}");
+    let len = body.len().to_string();
+    let bearer = auth.map(|t| format!("Bearer {t}"));
+    let mut headers = vec![
+        ("Host", host.as_str()),
+        ("Origin", origin.as_str()),
+        ("Content-Type", "application/json"),
+        ("Content-Length", len.as_str()),
+    ];
+    if let Some(b) = &bearer {
+        headers.push(("Authorization", b.as_str()));
+    }
+    send(
+        server.addr(),
+        request("POST", path, &headers, body.as_bytes()),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn about_names_the_app_to_a_session_and_to_nobody_else() {
+    let control = Secret::generate(TOKEN_BYTES).unwrap();
+    let server = Rules
+        .start(StartConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            limits: Limits::default(),
+            clock: Arc::new(ManualClock::new()),
+            pairing_ttl: Duration::from_secs(60),
+            control_secret: control.clone(),
+            instance: Secret::generate(CODE_BYTES).unwrap(),
+            status: HubStatus {
+                engine_ready: false,
+                problem: None,
+                capabilities: Vec::new(),
+            },
+        })
+        .await
+        .expect("the hub starts");
+
+    let hello = get(&server, "/api/rules/hello", None).await;
+    assert_eq!(hello.status, 200, "{hello:?}");
+    assert_eq!(hello.json()["app"], "rules-desktop");
+
+    let about = rules_hub::IDENTITY.route("about");
+    assert_eq!(get(&server, &about, None).await.status, 401);
+
+    let code = post(&server, "/api/control/pair", Some(&control.to_hex()), "{}").await;
+    assert_eq!(code.status, 200, "{code:?}");
+    let body = format!(r#"{{"code":"{}"}}"#, code.json()["code"].as_str().unwrap());
+    let token = post(&server, "/auth/exchange", None, &body).await;
+    assert_eq!(token.status, 200, "{token:?}");
+    let token = token.json()["token"].as_str().unwrap().to_owned();
+
+    let r = get(&server, &about, Some(&token)).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["app"], "rules-desktop");
+    assert_eq!(r.json()["version"], rules_hub::version());
+}
+
+/// Every name that lands on the disk, in the registry or in the environment of a person.
+fn names(id: &AppIdentity) -> Vec<(&'static str, String)> {
+    vec![
+        ("app", id.app.to_owned()),
+        ("program file", id.program_file()),
+        ("config dir variable", id.var("CONFIG_DIR")),
+        ("port variable", id.var("PORT")),
+        ("desktop file", id.desktop_file()),
+        ("agent label", id.agent_label()),
+        ("route of hello", id.route("hello")),
+        ("default port", id.default_port.to_string()),
+    ]
+}
+
+#[test]
+fn no_name_of_the_rules_hub_is_a_name_of_another_app() {
+    let ours = names(&rules_hub::IDENTITY);
+    for (what, x) in &ours {
+        let theirs = names(&DEMO_IDENTITY);
+        let (_, y) = theirs.iter().find(|(w, _)| w == what).unwrap();
+        assert_ne!(x, y, "{what} is the same as the demo app's: {x}");
+    }
+    // The tasks hub is not a dependency here; its port is the one name two hubs on one machine
+    // would fight over.
+    assert_ne!(
+        rules_hub::IDENTITY.default_port,
+        17615,
+        "the port of tasks-hub"
+    );
+}

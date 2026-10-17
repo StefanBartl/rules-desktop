@@ -4,8 +4,9 @@
 all-features = false
 
 [advisories]
-# Known vulnerabilities and unmaintained crates are errors.
-unmaintained = "workspace"
+# Known vulnerabilities and unmaintained crates are errors, in the whole tree: the dependencies that
+# come with appkit are transitive.
+unmaintained = "all"
 yanked = "deny"
 ignore = []
 
@@ -28,9 +29,12 @@ multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
 highlight = "all"
+# An app is built on appkit, never on another app.
+deny = [{ crate = "tasks-hub" }, { crate = "hub-testkit" }]
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# appkit, pinned by its tag (tools/check-appkit-pin.py).
+allow-git = ["https://github.com/StefanBartl/appkit"]

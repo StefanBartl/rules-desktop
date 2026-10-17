@@ -66,6 +66,8 @@ jobs:
       - run: cargo deny check
       # No crate version younger than a week (see tools/check-lock-age.py).
       - run: python3 tools/check-lock-age.py --min-days 7
+      # appkit is the one git source: the commit Cargo.lock pins must be the one its tag names now.
+      - run: python3 tools/check-appkit-pin.py
 
   ui:
     runs-on: ubuntu-latest

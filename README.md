@@ -48,13 +48,26 @@ The planning notes live outside this repository, in the maintainer's task vault.
 ## Layout (planned)
 
 ```
-crates/rules-hub/   the hub: routes, engine method list, adapters (on the shared kit)
+crates/rules-hub/   the hub: routes, engine method list, adapters, on appkit (see below)
 ui/                 the browser interface (Svelte 5, Vite, TypeScript)
 e2e/                browser tests against the real binary and the real engine, with a synthetic rule set
 src-tauri/          the native shell (later)
 docs/               usage, security, releasing
 engine.lock         the rules.nvim and lib.nvim commits this is built and tested against
 ```
+
+## The shared kit
+
+The server guard, sessions, pairing, limits and the login entry come from
+[appkit](https://github.com/StefanBartl/appkit), the kit tasks-desktop is built on too. It is a git dependency pinned
+by its tag in `Cargo.toml`; `tools/check-appkit-pin.py` checks that the tag still names the commit `Cargo.lock` holds.
+The hub already starts on it and passes the kit's security matrix (`crates/rules-hub/tests/security.rs`); it has its
+own names (config folder `rules-desktop`, program `rules-hub`, port 17616, routes under `/api/rules/`) and one route
+behind a session, `about`. Its commands and views come with the read-only UI phase.
+
+To try a change of appkit before it has a tag, point the crates at a local checkout in a `.cargo/config.toml` that is
+not committed (`[patch."https://github.com/StefanBartl/appkit"]`). That rewrites `Cargo.lock`: restore it with
+`git checkout -- Cargo.lock` before a commit, then run the pin check.
 
 ## License
 
