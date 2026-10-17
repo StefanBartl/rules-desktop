@@ -374,6 +374,18 @@ async fn about_names_the_engine_from_its_hello() {
     assert_eq!(r.status, 200, "{r:?}");
     assert!(r.json()["engine"].is_null());
     assert_eq!(r.json()["engine_problem"], "engine_timeout");
+
+    // A hello without an engine object is a broken engine, not a missing one.
+    for hello in [
+        r#"{"schema":1,"kind":"rules.hello"}"#,
+        r#"{"engine":"text"}"#,
+    ] {
+        *engine.hello.lock().unwrap() = Ok(hello.to_owned());
+        let r = hub.get(&route("about")).await;
+        assert_eq!(r.status, 200, "{r:?}");
+        assert!(r.json()["engine"].is_null(), "{hello}");
+        assert_eq!(r.json()["engine_problem"], "engine_protocol", "{hello}");
+    }
 }
 
 #[tokio::test]

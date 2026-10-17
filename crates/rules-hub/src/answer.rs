@@ -29,8 +29,9 @@ pub(crate) fn engine_failure(error: EngineError) -> Response {
             let status = match r.code.as_str() {
                 "invalid_argument" | "unsupported_schema" => StatusCode::BAD_REQUEST,
                 "not_found" => StatusCode::NOT_FOUND,
-                "payload_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
-                // The engine could not do its job: that is the server's side.
+                // The engine could not do its job: that is the server's side. This includes
+                // `payload_too_large`: the hub only sends an id of at most 100 bytes, so the
+                // refusal means the engine's own answer went over its limit, not the request.
                 _ => StatusCode::BAD_GATEWAY,
             };
             let code_ok = !r.code.is_empty()
@@ -141,7 +142,7 @@ mod tests {
             (refusal("invalid_argument", "m"), 400),
             (refusal("unsupported_schema", "m"), 400),
             (refusal("not_found", "no rule with the id X"), 404),
-            (refusal("payload_too_large", "m"), 413),
+            (refusal("payload_too_large", "m"), 502),
             (refusal("io", "m"), 502),
             (refusal("internal", "m"), 502),
             (EngineError::Busy, 503),

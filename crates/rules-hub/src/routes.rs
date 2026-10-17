@@ -34,7 +34,10 @@ pub const ROUTES: &[(&str, MakeRoute)] = &[
     ("about", || get(about)),
 ];
 
-/// The router of the app, built from [`ROUTES`].
+/// The router of the app, built from [`ROUTES`] and from nothing else. Invariant: this stays a
+/// pure fold over the table, with no extra `route` or `merge`, because [`crate::DATA_ROUTES`] and
+/// the security matrix only know the routes of the table; a route added beside it would be served
+/// without being tried there.
 pub(crate) fn app_routes(_core: &Arc<Shared>) -> Router<Arc<Shared>> {
     ROUTES.iter().fold(Router::new(), |router, (name, make)| {
         router.route(&IDENTITY.route(name), make())
@@ -174,7 +177,13 @@ async fn about(State(st): State<Arc<Shared>>, RawQuery(query): RawQuery) -> Resp
         None => None,
         Some(engine) => match engine.call(Calls::Hello, None).await {
             Ok(reply) => match serde_json::from_str::<Value>(&reply.text) {
-                Ok(doc) => Some(doc["engine"].clone()),
+                // A `hello` without an `engine` object is an engine that broke the contract, not
+                // a missing engine.
+                Ok(doc) if doc["engine"].is_object() => Some(doc["engine"].clone()),
+                Ok(_) => {
+                    problem = Some("engine_protocol");
+                    None
+                }
                 Err(_) => {
                     problem = Some("engine_failed");
                     None
