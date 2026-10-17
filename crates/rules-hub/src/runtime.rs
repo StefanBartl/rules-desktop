@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::bodies::BodiesEngine;
+use crate::editor::FileOpener;
 use crate::engine::{Calls, Engine};
 use crate::sources::{SourceFile, SourcePolicy};
 use crate::store::{self, Cached, RefreshOptions, SnapshotStore, StoreOptions, SHAPE};
@@ -33,11 +34,21 @@ pub struct RulesRuntime {
     pub(crate) search: Option<Arc<SearchIndex>>,
     /// The event streams that are open, by session token.
     pub(crate) streams: Arc<StreamCounter>,
+    /// Shows a rule file in an editor; none in a hub that cannot.
+    pub(crate) editor: Option<Editor>,
     /// The indexer and the refresher; they end with the runtime.
     jobs: Mutex<Vec<JoinHandle<()>>>,
     // Kept alive: the refresher ends when every sender of hints is gone.
     _hints: Option<mpsc::UnboundedSender<Hint>>,
     _watcher: Option<Watcher>,
+}
+
+/// How a rule file is shown in an editor, and where the rule sets are.
+#[derive(Clone)]
+pub struct Editor {
+    /// The folder `source` of a rule is relative to: `<vault>/rulesets`.
+    pub rulesets: PathBuf,
+    pub opener: Arc<dyn FileOpener>,
 }
 
 /// What the hub watches: the vault, and how often it scans.
@@ -141,6 +152,7 @@ impl RulesRuntime {
         sources: Arc<SourcePolicy>,
         max_age: Option<Duration>,
         watch: Option<Watch>,
+        editor: Option<Editor>,
     ) -> Self {
         let store = SnapshotStore::new(
             engine.clone(),
@@ -184,6 +196,7 @@ impl RulesRuntime {
             held: Mutex::new(None),
             search,
             streams: Arc::default(),
+            editor,
             jobs: Mutex::new(jobs),
             _hints: hints,
             _watcher: watcher,
@@ -254,7 +267,7 @@ mod tests {
             problem: None,
             capabilities: Vec::new(),
         };
-        RulesRuntime::new(None, status, Arc::new(policy), None, None)
+        RulesRuntime::new(None, status, Arc::new(policy), None, None, None)
     }
 
     #[test]

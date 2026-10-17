@@ -35,6 +35,7 @@ const SNAPSHOT_DIGEST: &str = "sha256:9609c01610189534";
 struct FakeEngine {
     snapshot: Mutex<String>,
     hello: Mutex<Result<String, ()>>,
+    rule: Mutex<String>,
     asked: Mutex<Vec<(&'static str, Option<Value>)>>,
 }
 
@@ -43,6 +44,7 @@ impl FakeEngine {
         Arc::new(Self {
             snapshot: Mutex::new(SNAPSHOT.trim_end().to_owned()),
             hello: Mutex::new(Ok(HELLO.trim_end().to_owned())),
+            rule: Mutex::new(RULE.trim_end().to_owned()),
             asked: Mutex::new(Vec::new()),
         })
     }
@@ -97,7 +99,7 @@ impl Engine for FakeEngine {
                     if id != "DEP-01" {
                         return Err(Self::not_found(id));
                     }
-                    RULE.trim_end().to_owned()
+                    self.rule.lock().unwrap().clone()
                 }
                 other => panic!("the fake engine was asked {other}"),
             };
@@ -132,6 +134,16 @@ async fn start_classified(
     sources: Arc<SourcePolicy>,
     watch: Option<Watch>,
 ) -> Hub {
+    start_full(engine, max_age, sources, watch, None).await
+}
+
+async fn start_full(
+    engine: Option<Arc<FakeEngine>>,
+    max_age: Option<Duration>,
+    sources: Arc<SourcePolicy>,
+    watch: Option<Watch>,
+    editor: Option<rules_hub::Editor>,
+) -> Hub {
     let control = Secret::generate(TOKEN_BYTES).unwrap();
     let server = rules_hub::start(rules_hub::Start {
         addr: "127.0.0.1:0".parse().unwrap(),
@@ -155,6 +167,7 @@ async fn start_classified(
         engine: engine.map(|e| e as Arc<dyn Engine>),
         sources,
         watch,
+        editor,
         ui: rules_hub::ui::UiFiles::none(),
     })
     .await
@@ -187,7 +200,7 @@ async fn every_route_of_the_table_is_served_to_a_session_and_to_nobody_else() {
         let without = get(&hub.server, &route(name), None).await;
         assert_eq!(without.status, 401, "{name}: {without:?}");
         // The stream does not end and the rescan is a POST: both are tried on their own below.
-        if matches!(*name, "events" | "rescan") {
+        if matches!(*name, "events" | "rescan" | "open") {
             continue;
         }
         let with = hub.get(&route(name)).await;
@@ -862,6 +875,7 @@ async fn the_page_of_a_folder_is_served_to_everybody_and_nothing_else_of_it() {
         engine: None,
         sources: Arc::default(),
         watch: None,
+        editor: None,
         ui: rules_hub::ui::UiFiles::load(&dir).unwrap(),
     })
     .await
@@ -879,4 +893,121 @@ async fn the_page_of_a_folder_is_served_to_everybody_and_nothing_else_of_it() {
         "{csp}"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Opening the file of a rule in an editor.
+
+/// An editor that writes down what it was asked to show.
+struct Recorder(Mutex<Vec<(std::path::PathBuf, Option<u32>)>>);
+
+impl rules_hub::editor::FileOpener for Recorder {
+    fn open(&self, file: &std::path::Path, line: Option<u32>) -> Result<(), String> {
+        self.0.lock().unwrap().push((file.to_path_buf(), line));
+        Ok(())
+    }
+}
+
+/// The rule sets of a vault with the file the golden rule names (`Checklists/DEP.md`).
+fn rulesets_with_file(name: &str) -> std::path::PathBuf {
+    let dir =
+        std::env::temp_dir().join(format!("rules-desktop-open-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Checklists")).unwrap();
+    std::fs::write(dir.join("Checklists/DEP.md"), "# DEP\n").unwrap();
+    dir
+}
+
+async fn start_editing(
+    engine: &Arc<FakeEngine>,
+    rulesets: &std::path::Path,
+) -> (Hub, Arc<Recorder>) {
+    let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
+    let hub = start_full(
+        Some(Arc::clone(engine)),
+        None,
+        Arc::default(),
+        None,
+        Some(rules_hub::Editor {
+            rulesets: rulesets.to_path_buf(),
+            opener: Arc::clone(&recorder) as Arc<dyn rules_hub::editor::FileOpener>,
+        }),
+    )
+    .await;
+    (hub, recorder)
+}
+
+async fn open(hub: &Hub, body: &str) -> appkit_testkit::wire::Reply {
+    post(&hub.server, &route("open"), Some(&hub.token), body).await
+}
+
+#[tokio::test]
+async fn the_file_of_a_rule_is_shown_at_its_line() {
+    let engine = FakeEngine::new();
+    let dir = rulesets_with_file("ok");
+    let (hub, recorder) = start_editing(&engine, &dir).await;
+    let r = open(&hub, r#"{"id":"DEP-01"}"#).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let seen = recorder.0.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(seen[0].0.ends_with("Checklists/DEP.md") || seen[0].0.ends_with(r"Checklists\DEP.md"));
+    assert_eq!(seen[0].1, Some(5), "the line of the golden rule");
+}
+
+#[tokio::test]
+async fn only_a_rule_of_the_snapshot_is_opened_and_only_a_file_of_the_rule_sets() {
+    let engine = FakeEngine::new();
+    let dir = rulesets_with_file("refuse");
+    let (hub, recorder) = start_editing(&engine, &dir).await;
+    // An id the snapshot does not hold is not asked of the engine and opens nothing.
+    for body in [r#"{"id":"NOPE-01"}"#, r#"{"id":"../x"}"#] {
+        let r = open(&hub, body).await;
+        assert_eq!(r.status, 404, "{body}: {r:?}");
+    }
+    assert_eq!(
+        engine.count("rule"),
+        0,
+        "an id of no rule was asked of the engine"
+    );
+    // A file name the client sends is not a thing: the request holds an id and nothing else.
+    let r = open(&hub, r#"{"id":"DEP-01","file":"C:/x"}"#).await;
+    assert_eq!(r.status, 400, "{r:?}");
+    for bad in [
+        "{}",
+        "[]",
+        "not json",
+        r#"{"id":5}"#,
+        r#"{"id":"a\u0000b"}"#,
+    ] {
+        let r = open(&hub, bad).await;
+        assert_eq!(r.status, 400, "{bad}: {r:?}");
+    }
+    // The engine names a source that climbs out of the rule sets, or one that is not there.
+    for source in [
+        "../outside.md",
+        "/etc/passwd",
+        "Checklists/GONE.md",
+        "Checklists",
+    ] {
+        let mut doc: Value = serde_json::from_str(RULE).unwrap();
+        doc["rule"]["source"] = json!(source);
+        *engine.rule.lock().unwrap() = doc.to_string();
+        let r = open(&hub, r#"{"id":"DEP-01"}"#).await;
+        assert_eq!(r.status, 400, "{source}: {r:?}");
+        assert_eq!(r.json()["error"]["code"], "open_refused");
+    }
+    assert!(
+        recorder.0.lock().unwrap().is_empty(),
+        "something was opened"
+    );
+}
+
+#[tokio::test]
+async fn a_hub_without_an_editor_says_so_and_a_session_is_needed() {
+    let engine = FakeEngine::new();
+    let hub = start(&engine).await;
+    let r = open(&hub, r#"{"id":"DEP-01"}"#).await;
+    assert_eq!(r.status, 404, "{r:?}");
+    assert_eq!(r.json()["error"]["code"], "open_unavailable");
+    let anonymous = post(&hub.server, &route("open"), None, r#"{"id":"DEP-01"}"#).await;
+    assert_eq!(anonymous.status, 401, "{anonymous:?}");
 }

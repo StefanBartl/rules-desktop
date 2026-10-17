@@ -423,3 +423,24 @@ describe('what the browser keeps', () => {
     expect(Object.keys(again.frecency)).toEqual(['action:rescan']);
   });
 });
+
+describe('opening the file of a rule', () => {
+  it('asks the hub for the id and says nothing when it worked', async () => {
+    const s = await ready();
+    await s.app.openInEditor('DEP-01');
+    const asked = s.fake.asked.filter((a) => a.path === '/api/rules/open');
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.method).toBe('POST');
+    expect(s.app.notice).toBeNull();
+  });
+
+  it('says a hub without an editor cannot, and any other failure in its own word', async () => {
+    const s = await ready();
+    s.fake.openStatus = 404;
+    await s.app.openInEditor('DEP-01');
+    expect(s.app.notice?.key).toBe('notice.open_unavailable');
+    s.fake.openStatus = 502;
+    await s.app.openInEditor('DEP-01');
+    expect(s.app.notice?.key).toBe('notice.open_failed');
+  });
+});

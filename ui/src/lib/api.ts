@@ -188,6 +188,16 @@ export class Hub {
     if (!response.ok) throw await failure(response);
   }
 
+  /** Show the file of a rule in Neovim, at its line (the hub starts the editor on its own machine). */
+  async open(id: string): Promise<void> {
+    const response = await this.request(`${API}/open`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    if (!response.ok) throw await failure(response);
+  }
+
   /** What this build is and which engine answers: only the words the page shows are taken. */
   async about(): Promise<About> {
     const doc = await this.json<Record<string, unknown>>(`${API}/about`);

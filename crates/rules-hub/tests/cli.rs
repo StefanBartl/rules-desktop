@@ -37,7 +37,9 @@ fn command(config: &Path, args: &[&str]) -> Command {
             c.env(k, v);
         }
     }
-    c.env("RULES_DESKTOP_CONFIG_DIR", config)
+    // No editor is started by a test: the hub writes what it would have opened to this file.
+    c.env("RULES_DESKTOP_EDITOR_LOG", config.join("editor.log"))
+        .env("RULES_DESKTOP_CONFIG_DIR", config)
         .env("RULES_VAULT", fixture_vault());
     if let Some(engine) = std::env::var_os("RULES_ENGINE_DIR") {
         c.env("RULES_ENGINE_DIR", engine);
@@ -172,9 +174,19 @@ impl Drop for Running {
     }
 }
 
+/// A port nobody listens on and no other test of this run was given: the system may hand the same free
+/// port to two callers that bind and drop it one after the other.
 fn free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
+    static GIVEN: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+    let mut given = GIVEN.lock().unwrap();
+    loop {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        if !given.contains(&port) {
+            given.push(port);
+            return port;
+        }
+    }
 }
 
 fn serve(name: &str, sources: Option<&str>) -> Running {
@@ -510,4 +522,48 @@ async fn a_new_rule_file_shows_up_by_itself_and_a_rescan_is_accepted() {
     .await;
     assert!(has_rule(&snapshot, "BB-03"));
     let _ = std::fs::remove_dir_all(&vault);
+}
+
+#[tokio::test]
+async fn open_writes_the_file_and_the_line_of_the_rule_it_would_show() {
+    let hub = serve("open", Some(CLASSES));
+    let token = token(&hub).await;
+    let auth = format!("Bearer {token}");
+    let origin = format!("http://127.0.0.1:{}", hub.port);
+    let post = |body: &'static str| {
+        let (auth, origin) = (auth.clone(), origin.clone());
+        let port = hub.port;
+        async move {
+            client::request(
+                port,
+                "POST",
+                "/api/rules/open",
+                &[
+                    ("Authorization", &auth),
+                    ("Origin", &origin),
+                    ("Content-Type", "application/json"),
+                ],
+                body,
+            )
+            .await
+            .expect("request")
+            .status
+        }
+    };
+    assert_eq!(post(r#"{"id":"AA-01"}"#).await, 200);
+    let logged = std::fs::read_to_string(hub.dir.join("editor.log")).unwrap();
+    let line = logged.lines().next().unwrap().replace('\\', "/");
+    assert!(
+        line.contains("/rulesets/alpha/regeln/alpha.md:"),
+        "{logged}"
+    );
+    // An id the rule sets do not hold opens nothing more.
+    assert_eq!(post(r#"{"id":"NOPE-01"}"#).await, 404);
+    assert_eq!(
+        std::fs::read_to_string(hub.dir.join("editor.log"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
 }

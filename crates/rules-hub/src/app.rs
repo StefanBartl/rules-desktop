@@ -14,11 +14,12 @@ use appkit_hub::env::Env;
 use appkit_hub::{HubStatus, Limits};
 use serde_json::Value;
 
+use crate::editor::TerminalOpener;
 use crate::engine::{cli_config, probe, CliEngine, Engine, DISCOVERY};
 use crate::sources::SourcePolicy;
 use crate::store::RefreshOptions;
 use crate::ui::UiFiles;
-use crate::{client, Start, Watch, IDENTITY};
+use crate::{client, Editor, Start, Watch, IDENTITY};
 
 /// What to do when the hub is started.
 #[derive(Debug, Clone, Default)]
@@ -91,6 +92,8 @@ pub struct EngineState {
     pub note: Option<String>,
     /// The vault to watch, once the engine is known to be there.
     pub vault: Option<PathBuf>,
+    /// The Neovim that was found, for opening a file in it.
+    pub nvim: Option<PathBuf>,
 }
 
 /// Find Neovim, the engine and the vault, start the engine and ask it `hello`.
@@ -104,6 +107,7 @@ pub async fn engine_state(file: &FileConfig<NoSettings>, env: &Env) -> EngineSta
         engine: None,
         note: Some(note),
         vault: None,
+        nvim: None,
     };
     let inputs = AppInputs {
         lib_dir: None,
@@ -133,6 +137,7 @@ pub async fn engine_state(file: &FileConfig<NoSettings>, env: &Env) -> EngineSta
             },
             engine: Some(Arc::new(engine)),
             vault: Some(setup.vault.value.clone()),
+            nvim: Some(setup.nvim.value.clone()),
             note: setup
                 .lib_problem
                 .as_ref()
@@ -206,6 +211,14 @@ pub async fn serve(opts: ServeOptions) -> Result<(), String> {
         status: status.clone(),
         engine: state.engine.clone(),
         sources: Arc::clone(&sources),
+        editor: state
+            .nvim
+            .clone()
+            .zip(state.vault.clone())
+            .map(|(nvim, vault)| Editor {
+                rulesets: vault.join("rulesets"),
+                opener: Arc::new(TerminalOpener::new(nvim, env.clone())),
+            }),
         ui: ui.clone(),
         watch: state.vault.clone().map(|vault| Watch {
             vault,

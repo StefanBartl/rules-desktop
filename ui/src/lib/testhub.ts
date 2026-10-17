@@ -41,6 +41,8 @@ export class FakeHub {
   etag = 'sha256:9609c01610189534';
   /** Ids `rule` answers 404 for although they are in the snapshot. */
   goneIds = new Set<string>();
+  /** open answers with this status (200: the editor is started). */
+  openStatus = 200;
   searchIds: string[] = [];
   /** The `total` the search answers with; `null`: the number of `searchIds`. */
   searchTotal: number | null = null;
@@ -108,6 +110,10 @@ export class FakeHub {
         });
       case '/api/rules/rescan':
         return new Response(null, { status: 202 });
+      case '/api/rules/open':
+        return this.openStatus === 200
+          ? json({ ok: true })
+          : json({ error: { code: this.openStatus === 404 ? 'open_unavailable' : 'open_failed', message: 'no' } }, this.openStatus);
       case '/api/rules/events': {
         if (this.streamStatus !== 0) return new Response(null, { status: this.streamStatus });
         let controller: ReadableStreamDefaultController<Uint8Array> | null = null;

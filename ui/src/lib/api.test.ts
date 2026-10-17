@@ -122,6 +122,17 @@ describe('the hub client', () => {
     expect(hub.eventsUrl).toBe('http://127.0.0.1:17616/api/rules/events');
   });
 
+  it('posts the id of a rule to open and nothing else', async () => {
+    const { fetchFn, sent } = recording([() => json({ ok: true }), () => json({ error: { code: 'open_failed' } }, 502)]);
+    const hub = new Hub(fetchFn);
+    hub.setToken('tok');
+    await hub.open('DEP-01');
+    expect(sent[0]?.url).toBe('/api/rules/open');
+    expect(sent[0]?.init.method).toBe('POST');
+    expect(JSON.parse(String(sent[0]?.init.body))).toEqual({ id: 'DEP-01' });
+    await expect(hub.open('DEP-01')).rejects.toMatchObject({ status: 502, code: 'open_failed' });
+  });
+
   it('takes only the three words of the engine in about', async () => {
     const { fetchFn } = recording([
       () => json({ app: 'rules-desktop', version: '1', engine: { version: '0.1.0', git: 7, nvim: 'v0.12.2', path: '/x' } }),

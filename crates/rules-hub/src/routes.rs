@@ -7,11 +7,14 @@
 
 use std::sync::Arc;
 
-use appkit_hub::{error_body, etag_matches, json_response, no_query, not_modified, single, Core};
+use appkit_hub::{
+    error_body, etag_matches, json_response, no_query, not_modified, single, vault_request,
+    vault_text, Core,
+};
 use axum::extract::{RawQuery, State};
 use axum::http::header::{self, HeaderMap};
 use axum::http::StatusCode;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, MethodRouter};
 use axum::Router;
 use serde_json::{json, Value};
@@ -37,6 +40,7 @@ pub const ROUTES: &[(&str, MakeRoute)] = &[
     ("events", || get(live::events)),
     ("search", || get(live::search)),
     ("rescan", || post(live::rescan)),
+    ("open", || post(open)),
 ];
 
 /// The router of the app, built from [`ROUTES`] and from nothing else. Invariant: this stays a
@@ -164,6 +168,72 @@ async fn rule(State(st): State<Arc<Shared>>, RawQuery(query): RawQuery) -> Respo
     }
 }
 
+/// `POST /api/rules/open` with `{"id": "<rule id>"}`: show the file of the rule in Neovim, at its line. The
+/// file is not named by the client: the `source` of the rule the engine reports is, and it must be a plain
+/// file inside `<vault>/rulesets` once links are resolved. Only an id of the held snapshot is asked for.
+async fn open(State(st): State<Arc<Shared>>, body: axum::body::Bytes) -> Response {
+    let rt = st.rt();
+    let Some(editor) = &rt.editor else {
+        return error_body(
+            StatusCode::NOT_FOUND,
+            "open_unavailable",
+            "this hub cannot open a file in an editor",
+        );
+    };
+    let map = match vault_request(&body, &["id"]) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let id = match vault_text(&map, "id", MAX_ID_BYTES) {
+        Ok(id) if !id.chars().any(char::is_control) => id,
+        Ok(_) => {
+            return error_body(
+                StatusCode::BAD_REQUEST,
+                "bad_id",
+                "id holds a control character",
+            )
+        }
+        Err(r) => return r,
+    };
+    if !rt.store.has_engine() {
+        return engine_unavailable(&rt);
+    }
+    let cached = match rt.store.current().await {
+        Ok(c) => c,
+        Err(error) => return engine_failure(error),
+    };
+    let Some(held) = rt.held(&cached) else {
+        return no_snapshot();
+    };
+    if !held.ids.contains(&id) {
+        return error_body(StatusCode::NOT_FOUND, "not_found", "no rule with this id");
+    }
+    let reply = match ask(&rt, Calls::Rule, Some(&json!({ "id": id }))).await {
+        Ok(r) => r,
+        Err(response) => return response,
+    };
+    let doc: Value = serde_json::from_str(&reply.text).unwrap_or(Value::Null);
+    let Some(source) = doc["rule"]["source"].as_str() else {
+        return error_body(
+            StatusCode::BAD_GATEWAY,
+            "engine_failed",
+            "the engine named no file for this rule",
+        );
+    };
+    let line = doc["rule"]["line"]
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|n| *n > 0);
+    let file = match crate::editor::file_in_vault(&editor.rulesets, source) {
+        Ok(f) => f,
+        Err(why) => return error_body(StatusCode::BAD_REQUEST, "open_refused", why),
+    };
+    match editor.opener.open(&file, line) {
+        Ok(()) => axum::Json(json!({ "ok": true })).into_response(),
+        Err(why) => error_body(StatusCode::BAD_GATEWAY, "open_failed", &why),
+    }
+}
+
 /// What a route that reads the held snapshot answers when it is not one.
 fn no_snapshot() -> Response {
     eprintln!("engine: the snapshot has no list of rules or of files");
@@ -279,7 +349,7 @@ mod tests {
         }
         assert_eq!(
             names,
-            ["snapshot", "rule", "sources", "about", "events", "search", "rescan"]
+            ["snapshot", "rule", "sources", "about", "events", "search", "rescan", "open"]
         );
     }
 

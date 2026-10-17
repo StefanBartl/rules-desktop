@@ -52,6 +52,7 @@
       <dd>
         <code>{shownText(line)}</code>
         <button type="button" onclick={() => void copy(line)}>{t('detail.copy')}</button>
+        <button type="button" onclick={() => void app.openInEditor(rule.id)}>{t('detail.open')}</button>
         {#if copied !== 'idle'}<span role="status" class="muted">{copied === 'ok' ? t('detail.copied') : t('detail.copy_failed')}</span>{/if}
       </dd>
       {#if rule.section !== ''}

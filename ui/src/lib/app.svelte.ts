@@ -646,6 +646,17 @@ export class App {
     await item.action.run();
   }
 
+  /** Show the file of a rule in the editor of the machine the hub runs on; the answer is a word in the toast. */
+  async openInEditor(id: string): Promise<void> {
+    try {
+      await this.env.hub.open(id);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) return;
+      const unavailable = error instanceof ApiError && error.code === 'open_unavailable';
+      this.notice = { key: unavailable ? 'notice.open_unavailable' : 'notice.open_failed' };
+    }
+  }
+
   dismissNotice(): void {
     this.notice = null;
   }
