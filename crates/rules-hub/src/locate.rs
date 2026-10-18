@@ -50,10 +50,7 @@ impl ProcessLocator {
         };
         let mut command = tokio::process::Command::new(&self.cfg.nvim);
         command
-            .args(["--headless", "-u", "NONE", "-i", "NONE", "-n", "-l"])
-            .arg(&self.cfg.script)
-            .arg("locate")
-            .arg(id)
+            .args(locate_args(&self.cfg.script, id))
             .env_clear()
             .envs(child_env(&self.cfg.env, Some(&vars)))
             .stdin(std::process::Stdio::null())
@@ -76,6 +73,18 @@ impl ProcessLocator {
             _ => Err("the engine could not tell where the file is"),
         }
     }
+}
+
+/// The arguments of the question. The id comes after `--`: a rule id may look like a flag (`--trust=C:/x` is a
+/// loadable id), and the engine would read it as one and refuse the question.
+fn locate_args(script: &std::path::Path, id: &str) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = ["--headless", "-u", "NONE", "-i", "NONE", "-n", "-l"]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    args.push(script.into());
+    args.extend(["locate", "--", id].map(Into::into));
+    args
 }
 
 /// The two lines of the answer: the file, then the ruleset (empty: none).
@@ -118,6 +127,13 @@ mod tests {
         // No ruleset named: the file is there, and nothing says where it was loaded from.
         assert_eq!(parse("/v/a/b.md\n\n").unwrap().root, None);
         assert_eq!(parse("/v/a/b.md\n").unwrap().root, None);
+    }
+
+    #[test]
+    fn the_id_comes_after_the_end_of_the_flags() {
+        let args = locate_args(std::path::Path::new("rules.lua"), "--trust=C:/x");
+        let tail: Vec<_> = args.iter().rev().take(3).collect();
+        assert_eq!(tail, ["--trust=C:/x", "--", "locate"]);
     }
 
     #[test]

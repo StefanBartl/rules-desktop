@@ -591,6 +591,8 @@ async fn open_finds_the_file_by_the_place_the_engine_knows_not_by_the_name_in_th
     );
     write_rule(&one.join("a.md"), "AAA-01", "first");
     write_rule(&two.join("b.md"), "BBB-01", "second");
+    // An id that looks like a flag loads like any other and must open like any other.
+    write_rule(&one.join("h.md"), "--trust=C:/x", "looks like a flag");
     let vault = base.join("vault");
     write_rule(
         &vault.join("rulesets/one/Checklists/a.md"),
@@ -625,6 +627,7 @@ async fn open_finds_the_file_by_the_place_the_engine_knows_not_by_the_name_in_th
     for (id, want) in [
         ("AAA-01", "one/Checklists/a.md"),
         ("BBB-01", "two/Checklists/b.md"),
+        ("--trust=C:/x", "one/Checklists/h.md"),
     ] {
         let body = format!(r#"{{"id":"{id}"}}"#);
         let reply = client::request(
