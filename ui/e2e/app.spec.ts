@@ -249,3 +249,20 @@ test('Back and Forward walk the views and the open rule, and the address stays c
   await expect(detail.getByRole('heading', { name: 'AA-01' })).toBeVisible();
   expect(page.url()).toBe(`${ORIGIN}/`);
 });
+
+test('a window that gets the focus back asks the hub for a scan, at most every few seconds', async ({ page }) => {
+  const rescans: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().endsWith('/api/rules/rescan')) rescans.push(r.url());
+  });
+  await pair(page);
+  // Whatever the load itself asked for is over once the pause of the page has passed.
+  await page.waitForTimeout(5200);
+  const before = rescans.length;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => rescans.length).toBe(before + 1);
+  // A second focus right after is not asked again.
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.waitForTimeout(500);
+  expect(rescans.length).toBe(before + 1);
+});
