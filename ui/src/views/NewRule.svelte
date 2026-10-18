@@ -51,6 +51,12 @@
     if (!open && dialog.open) dialog.close();
   });
 
+  // A preview says what the fields said when it was asked for: when one changes, it is no longer true.
+  $effect(() => {
+    void [family, title, severity, text, check, agent, ruleset];
+    preview = null;
+  });
+
   // The next id follows the family the person types, after a short pause; an older answer is dropped.
   let asked = 0;
   $effect(() => {

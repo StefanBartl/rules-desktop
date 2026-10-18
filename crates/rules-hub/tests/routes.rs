@@ -1400,9 +1400,12 @@ async fn an_id_the_snapshot_does_not_hold_is_a_404_and_new_is_judged_by_its_rule
     assert_eq!(hub.ops(&new(Some("Checklists"))).await.status, 200);
     assert_eq!(
         hub.ops(&new(Some(".."))).await.status,
-        403,
-        "a name that is no rule set name has no class"
+        404,
+        "a name that is no rule set name is not held"
     );
+    // The start or the end of a name is not a name.
+    assert_eq!(hub.ops(&new(Some("Check"))).await.status, 404);
+    assert_eq!(hub.ops(&new(Some("lists"))).await.status, 404);
     let not_a_name = json!({ "ops": [{ "op": "new", "family": "DEP", "ruleset": 7 }] });
     assert_eq!(hub.ops(&not_a_name.to_string()).await.status, 400);
 
@@ -1410,4 +1413,27 @@ async fn an_id_the_snapshot_does_not_hold_is_a_404_and_new_is_judged_by_its_rule
     let other = Arc::new(SourcePolicy::new([("elsewhere".to_owned(), Class::Public)]).unwrap());
     let closed = start_classified(Some(Arc::clone(&engine)), None, other, None).await;
     assert_eq!(closed.ops(&new(None)).await.status, 403);
+}
+
+#[tokio::test]
+async fn a_rule_set_is_named_as_the_snapshot_names_it_not_by_its_last_folder() {
+    // The engine finds a rule set by the last folder of its path as well: `Checklists` for `one/Checklists`. The class
+    // the hub works out must be the class of the rule set the engine writes into, so only the name of the snapshot counts.
+    let engine = FakeEngine::new();
+    let renamed = SNAPSHOT
+        .trim_end()
+        .replace("Checklists/", "one/Checklists/")
+        .replace(
+            r#""source":{"id":"Checklists"}"#,
+            r#""source":{"id":"one/Checklists"}"#,
+        );
+    *engine.snapshot.lock().unwrap() = renamed;
+    let hub = start_writable(&engine).await;
+    let new = |ruleset: &str| {
+        json!({ "dry_run": true, "ops": [{ "op": "new", "family": "DEP", "title": "t", "severity": "critical", "ruleset": ruleset }] })
+            .to_string()
+    };
+    assert_eq!(hub.ops(&new("one/Checklists")).await.status, 200);
+    assert_eq!(hub.ops(&new("Checklists")).await.status, 404);
+    assert_eq!(hub.ops(&new("two/Checklists")).await.status, 404);
 }

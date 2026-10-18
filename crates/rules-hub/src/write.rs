@@ -122,7 +122,19 @@ pub(crate) fn authorize(
         let source = if name == "new" {
             let ruleset = match op.get("ruleset") {
                 None | Some(Value::Null) => held.first_ruleset.as_deref(),
-                Some(Value::String(name)) => Some(name.as_str()),
+                Some(Value::String(name)) => {
+                    // The engine also finds a rule set by the last folder of its path: the name has to be one
+                    // the snapshot uses for a file (`<name>/<path>`) or the first one, so that the class worked
+                    // out here is the class of the rule set the engine will write into.
+                    if !names_a_ruleset(held, name) {
+                        return Err(Refusal {
+                            status: StatusCode::NOT_FOUND,
+                            code: "not_found",
+                            message: format!("ops[{n}]: no rule set of that name is held"),
+                        });
+                    }
+                    Some(name.as_str())
+                }
                 Some(_) => return Err(Refusal::bad(format!("ops[{n}]: ruleset must be a name"))),
             };
             let Some(family) = text("family") else {
@@ -155,6 +167,18 @@ pub(crate) fn authorize(
         }
     }
     Ok(())
+}
+
+/// Is `name` the name the held snapshot gives a rule set: the first one, or the start of the `source` of a file?
+fn names_a_ruleset(held: &Held, name: &str) -> bool {
+    held.first_ruleset.as_deref() == Some(name)
+        || held.files.as_ref().is_some_and(|files| {
+            files.iter().any(|f| {
+                f.path
+                    .strip_prefix(name)
+                    .is_some_and(|rest| rest.starts_with('/'))
+            })
+        })
 }
 
 fn not_written(n: usize) -> Refusal {
