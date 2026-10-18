@@ -58,6 +58,24 @@ engine's own way back. If someone changed the file since you opened the rule, no
 overview has **Reinstate**. A rule in a document with many rules, one whose rule set has no class, and the check of a rule
 whose check is a Lua function are shown and not written: the page says why.
 
+**New rule …** (button in the rules view, or `Ctrl+K`) opens a dialog: the family (the families of the rule set are
+offered), the next id of that family as the engine names it, title, severity, text, check and agent as JSON, and the name
+of the rule set (empty: the first one, which may be a document rule set: name the one that has one file per rule).
+**Preview** asks the engine for a dry run and shows what would be made and any warning (for example *pull before you
+create*); **Create** writes it and opens the new rule. The id is not reserved while you type: the engine picks it under
+the lock of the rule set when the rule is made.
+
+**Several at once:** the boxes in the list mark rules (only those the page may write); the bar above the list sets one
+severity for all marked rules or retires them, in a single request, each rule with the version you saw. One **Undo** takes
+all of it back.
+
+**Move …** in the editor puts the rule after or before another rule of the document that holds it (the file of the rule
+is not touched).
+
+**If the file changed meanwhile** the *Changed in the meantime* box opens and nothing is written. It shows the fields you
+changed next to what the file says now. You choose: write your change onto the new version (the other change stays, only
+the lines you changed move), look at the rule, or drop your change. The page never merges for you.
+
 ## 6. Back and Forward
 
 Each view, and each rule you open, is an entry of the history of the tab. **Back** and **Forward** of the browser (or

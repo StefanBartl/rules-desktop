@@ -3,7 +3,7 @@
 `rules-hub` is a small web server on your own machine that shows the rule set of
 [rules.nvim](https://github.com/StefanBartl/rules.nvim) in the browser: families with their counters, the rules with
 filters and a search over titles and texts, one rule with its file and its check, and what the engine could not load.
-It reads the rule set, and it changes a rule through the engine (severity, title, text, check, agent, retire, reinstate, with Undo; creating rules follows), and running the checks is for
+It reads the rule set and writes it through the engine (make, change, retire, reinstate and move rules, with Undo; see [WORKFLOW.md](WORKFLOW.md) section 5a), and running the checks is for
 [docmap-desktop](https://github.com/StefanBartl/docmap-desktop).
 
 ## What you need
