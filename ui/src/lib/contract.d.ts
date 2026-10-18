@@ -5,7 +5,7 @@
  *
  * Every document rules.nvim hands to a machine (read only). One of the kinds below, told apart by `kind`. A reader ignores fields it does not know: inside one version the contract only grows. The golden files next to this schema are the documents the engine writes.
  */
-export type RulesExport = Hello | Snapshot | List | Rule | NextId | Sources | Waivers | Result | Error;
+export type RulesExport = Hello | Snapshot | List | Rule | NextId | Sources | Waivers | Rulesets | Result | Error;
 
 /**
  * rules.error: what went wrong, in a code that is stable.
@@ -153,14 +153,18 @@ export type Result = Head & {
     inverse?: { [k: string]: unknown };
     n: number;
     ok: boolean;
-    op: "new" | "set" | "retire" | "reinstate" | "move" | "waive" | "renew" | "remove";
+    op: "new" | "set" | "retire" | "reinstate" | "move" | "waive" | "renew" | "remove" | "create_ruleset" | "archive_ruleset" | "restore_ruleset";
     /**
-     * created, changed, unchanged, retired, reinstated, moved, waived, renewed, removed, would_*, conflict, failed
+     * created, changed, unchanged, retired, reinstated, moved, waived, renewed, removed, archived, restored, would_*, conflict, failed
      */
     outcome?: string;
     placed?: {
       layout?: string;
     };
+    /**
+     * create_ruleset, archive_ruleset, restore_ruleset: the folder name of the ruleset (an entry of those operations has no id)
+     */
+    ruleset?: string;
     /**
      * things to know that did not stop the operation; absent when there are none. new: the rules-vault is behind its upstream, so another machine may make the same id. waive, renew: expires is before today, so the waiver is expired from the start
      */
@@ -226,6 +230,33 @@ export type RuleSummary = {
    */
   source: string;
   title: string;
+};
+
+/**
+ * rules.rulesets: the rulesets that are loaded, and the ones in the archive of the vault.
+ */
+export type Rulesets = Head & {
+  /**
+   * folder names under archive/rulesets/ of the vault; restore_ruleset brings one back
+   */
+  archived: string[];
+  digest: unknown;
+  items: {
+    /**
+     * the folder name; what create_ruleset, archive_ruleset and restore_ruleset take
+     */
+    folder: string;
+    /**
+     * a folder under rulesets/ of the vault: only those can be archived
+     */
+    in_vault: boolean;
+    /**
+     * how the engine calls the ruleset in a source (the last folder, or the folder above it too when two share a name)
+     */
+    name: string;
+  }[];
+  kind: "rules.rulesets";
+  rev: unknown;
 };
 
 export type Severity = "critical" | "recommended" | "nice-to-have";

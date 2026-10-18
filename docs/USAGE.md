@@ -67,7 +67,7 @@ away that held something back, a default where there was none) is asked first; "
 | Families | One row per family with its counters; a row opens the list narrowed to it. |
 | Coverage | Per family and per gate: how many rules have a check that runs by itself, only a question for an agent, or are manual. A row opens the list of its family (a gate, of its families). |
 | Waivers | The waivers of the project of this device: rule, reason, last day, paths, and whether a waiver has expired or is for a rule that is not loaded. Waive, renew (a new last day or none) and remove, with Undo. Needs `project` (below). |
-| Sources | The data classes of this device (`sources.json`): the keys with class and number of files, the default, and the files that have no class. Set, take away or add a class; a change that releases more is asked first. |
+| Sources | The rule sets of the vault (make one, archive one, bring one back) and the data classes of this device (`sources.json`): the keys with class and number of files, the default, and the files that have no class. Set, take away or add a class; a change that releases more is asked first. |
 | Rules | The list, with filters for family, severity and kind of check, and a search over titles and, once the hub has read them, over the texts. |
 
 A rule opens beside the list: its text as text, its file and line (copy, or **Open in Neovim**, which starts an editor on

@@ -845,3 +845,74 @@ describe('the data classes', () => {
     expect(s.app.classConfirm).toBeNull();
   });
 });
+
+describe('the rule sets of the vault', () => {
+  const made = {
+    status: 200,
+    body: {
+      kind: 'rules.result',
+      dry_run: false,
+      ok: true,
+      results: [
+        {
+          n: 1,
+          ok: true,
+          op: 'create_ruleset',
+          ruleset: 'beta',
+          changed_ids: [],
+          outcome: 'created',
+          inverse: { op: 'archive_ruleset', name: 'beta' },
+        },
+      ],
+    },
+  };
+
+  it('reads the rule sets and the archive', async () => {
+    const s = await ready();
+    await s.app.loadRulesets();
+    expect(s.app.rulesets?.items.map((i) => i.folder)).toEqual(['Checklists']);
+    s.fake.rulesetsAnswer = () => ({ status: 500, body: { error: { code: 'internal', message: 'no' } } });
+    await s.app.loadRulesets();
+    expect(s.app.rulesets).toBeNull();
+  });
+
+  it('counts a made rule set as saved although it names no rule, reads the list again and offers Undo', async () => {
+    const s = await ready();
+    s.fake.opsAnswer = () => made;
+    const reads = s.fake.count('/api/rules/rulesets');
+    expect(await s.app.makeRuleset('beta')).toBe(true);
+    expect(s.fake.opsRequests[0]?.ops).toEqual([{ op: 'create_ruleset', name: 'beta' }]);
+    expect(s.fake.count('/api/rules/rulesets')).toBe(reads + 1);
+    expect(s.app.notice?.key).toBe('write.saved');
+    expect(s.app.notice?.undo).toEqual([{ op: 'archive_ruleset', name: 'beta' }]);
+  });
+
+  it('asks before a rule set goes to the archive, and sends nothing when the person says no', async () => {
+    const s = await ready();
+    s.app.askArchive('Checklists');
+    expect(s.app.archiveAsk).toBe('Checklists');
+    s.app.cancelArchive();
+    expect(await s.app.archiveRuleset()).toBe(false);
+    expect(s.fake.opsRequests).toEqual([]);
+    s.app.askArchive('Checklists');
+    expect(await s.app.archiveRuleset()).toBe(true);
+    expect(s.fake.opsRequests[0]?.ops).toEqual([{ op: 'archive_ruleset', name: 'Checklists' }]);
+    expect(s.app.archiveAsk).toBeNull();
+  });
+
+  it('says a name that is taken is a refusal, not a clash of versions', async () => {
+    const s = await ready();
+    s.fake.opsAnswer = () => ({
+      status: 200,
+      body: {
+        kind: 'rules.result',
+        dry_run: false,
+        ok: false,
+        results: [{ n: 1, ok: false, op: 'create_ruleset', changed_ids: [], error: { code: 'conflict', message: 'taken' } }],
+      },
+    });
+    expect(await s.app.makeRuleset('beta')).toBe(false);
+    expect(s.app.conflicts).toEqual([]);
+    expect(s.app.notice?.key).toBe('write.failed');
+  });
+});

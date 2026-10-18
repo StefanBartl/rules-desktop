@@ -896,3 +896,88 @@ async fn waivers_are_made_renewed_and_removed_through_the_real_engine_in_the_pro
     assert!(!elsewhere.join(".rules-waivers.json").exists());
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[tokio::test]
+async fn a_rule_set_is_made_moved_to_the_archive_and_brought_back_through_the_real_engine() {
+    let base = std::env::temp_dir().join(format!("rules-desktop-rulesets-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let vault = base.join("vault");
+    let sets = vault.join("rulesets");
+    let alpha = write_rule_file(&sets.join("alpha"), "AA-01", "recommended", "first");
+    let beta = write_rule_file(&sets.join("beta"), "BB-01", "recommended", "second");
+    let beta_text = std::fs::read_to_string(&beta).unwrap();
+    let dir = config_dir(
+        "rulesets",
+        Some(r#"{"schema":1,"default":"internal","sources":{}}"#),
+    );
+    std::fs::write(
+        dir.join("config.json"),
+        serde_json::json!({ "vault": vault }).to_string(),
+    )
+    .unwrap();
+    let hub = serve_in(dir);
+    let token = token(&hub).await;
+    let held = until(&hub, &token, "/api/rules/snapshot", |s| {
+        has_rule(s, "AA-01") && has_rule(s, "BB-01")
+    })
+    .await;
+    assert!(has_rule(&held, "BB-01"), "{held}");
+    let op = |name: &str, verb: &str, dry_run: bool| serde_json::json!({ "schema": 1, "dry_run": dry_run, "ops": [{ "op": verb, "name": name }] });
+
+    // A dry run moves nothing.
+    let (status, dry) = post_ops(&hub, &token, &op("beta", "archive_ruleset", true)).await;
+    assert_eq!((status, dry["ok"].as_bool()), (200, Some(true)), "{dry}");
+    assert!(beta.exists());
+
+    // Archived: the folder moves, nothing is deleted, and the rules of the rule set leave the snapshot by themselves.
+    let (status, archived) = post_ops(&hub, &token, &op("beta", "archive_ruleset", false)).await;
+    assert_eq!(
+        (status, archived["ok"].as_bool()),
+        (200, Some(true)),
+        "{archived}"
+    );
+    assert!(!beta.exists());
+    let moved = vault.join("archive/rulesets/beta/_rules/BB/BB-01.md");
+    assert_eq!(std::fs::read_to_string(&moved).unwrap(), beta_text);
+    let after = get(&hub, &token, "/api/rules/snapshot").await.1;
+    assert!(!has_rule(&after, "BB-01") && has_rule(&after, "AA-01"));
+    // The archive is told by the engine, folder names only.
+    let listed = get(&hub, &token, "/api/rules/rulesets").await.1;
+    assert_eq!(listed["archived"], serde_json::json!(["beta"]), "{listed}");
+    assert_eq!(listed["items"].as_array().map(Vec::len), Some(1));
+    assert!(!listed.to_string().contains("archive/"));
+
+    // The last rule set is not archived.
+    let (_, last) = post_ops(&hub, &token, &op("alpha", "archive_ruleset", false)).await;
+    assert_eq!(last["results"][0]["error"]["code"], "invalid_argument");
+    assert!(alpha.exists());
+
+    // The engine's way back brings every byte back.
+    let inverse = archived["results"][0]["inverse"].clone();
+    let (_, restored) = post_ops(&hub, &token, &serde_json::json!({ "ops": [inverse] })).await;
+    assert_eq!(restored["ok"], true, "{restored}");
+    assert_eq!(std::fs::read_to_string(&beta).unwrap(), beta_text);
+    assert!(!vault.join("archive/rulesets/beta").exists());
+    let back = get(&hub, &token, "/api/rules/snapshot").await.1;
+    assert!(has_rule(&back, "BB-01"));
+
+    // A new rule set is an empty folder pair; a name that is not one is refused and makes nothing.
+    let (_, made) = post_ops(&hub, &token, &op("gamma", "create_ruleset", false)).await;
+    assert_eq!(made["ok"], true, "{made}");
+    assert!(sets.join("gamma/_rules/.gitkeep").exists());
+    assert!(sets.join("gamma/_layouts/.gitkeep").exists());
+    // An empty rule set has no rule to show it by: the list of rule sets does.
+    let listed = get(&hub, &token, "/api/rules/rulesets").await.1;
+    let folders: Vec<_> = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["folder"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(folders, ["alpha", "beta", "gamma"], "{listed}");
+    let (_, bad) = post_ops(&hub, &token, &op("../x", "create_ruleset", false)).await;
+    assert_eq!(bad["results"][0]["error"]["code"], "invalid_argument");
+    assert!(!vault.join("x").exists());
+
+    let _ = std::fs::remove_dir_all(&base);
+}

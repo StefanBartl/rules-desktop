@@ -30,7 +30,7 @@ pub const OPS_MAX: usize = 100;
 
 /// The operations the page may ask for. `waive`, `renew` and `remove` write the waiver file of the
 /// project of this device and not a rule set: the hub puts the project in itself (`with_project`).
-pub const OPS_ALLOWED: [&str; 8] = [
+pub const OPS_ALLOWED: [&str; 11] = [
     "new",
     "set",
     "retire",
@@ -39,10 +39,17 @@ pub const OPS_ALLOWED: [&str; 8] = [
     "waive",
     "renew",
     "remove",
+    "create_ruleset",
+    "archive_ruleset",
+    "restore_ruleset",
 ];
 
 /// The operations on the waivers of a project.
 pub const WAIVER_OPS: [&str; 3] = ["waive", "renew", "remove"];
+
+/// The operations on the rule sets of the vault (which ones it holds), not on a rule: `archive_ruleset` moves a rule set
+/// to the archive of the vault and never deletes it.
+pub const RULESET_OPS: [&str; 3] = ["create_ruleset", "archive_ruleset", "restore_ruleset"];
 
 /// The form and the size of a request of `ops`, before an engine process is asked: what is plainly
 /// not one is refused here, the rules of the rules are the engine's. Returns the request to send on.
@@ -72,6 +79,11 @@ pub fn check_ops_request(body: &[u8]) -> Result<Value, String> {
             .ok_or_else(|| format!("ops[{}] has no op", i + 1))?;
         if !OPS_ALLOWED.contains(&name) {
             return Err(format!("ops[{}]: this operation is not served", i + 1));
+        }
+        // The rule sets of the vault change on their own: what a later operation of the same request would be judged
+        // against (the held snapshot) would be out of date.
+        if RULESET_OPS.contains(&name) && ops.len() > 1 {
+            return Err(format!("ops[{}]: {name} goes alone in a request", i + 1));
         }
     }
     if let Some(id) = map.get("client_op_id") {
@@ -139,6 +151,10 @@ pub(crate) fn authorize(
             }
             continue;
         }
+        if RULESET_OPS.contains(&name) {
+            check_ruleset_op(policy, held, n, name, text("name"))?;
+            continue;
+        }
         let source = if name == "new" {
             let ruleset = match op.get("ruleset") {
                 None | Some(Value::Null) => held.first_ruleset.as_deref(),
@@ -187,6 +203,57 @@ pub(crate) fn authorize(
         }
     }
     Ok(())
+}
+
+/// A rule set is made, archived or restored by its name. Making one needs no class (it starts empty; the person classifies
+/// it in `sources.json` before anything is written into it); bringing one back from the archive is no write either (it
+/// is loaded again, with the class it has, or none). Archiving is a change of the vault like a write: a rule set that has
+/// no class on this device is never moved. A rule set the snapshot names is judged by its class; one
+/// that the snapshot does not mention at all holds no rule (an empty one just made, or none of that name: the engine says),
+/// so there is nothing to protect; a name the snapshot only mentions inside another name (`one/Checklists`) is refused,
+/// because the class worked out for it here would not be the class of the folder the engine moves.
+fn check_ruleset_op(
+    policy: &SourcePolicy,
+    held: &Held,
+    n: usize,
+    op: &str,
+    name: Option<&str>,
+) -> Result<(), Refusal> {
+    let Some(name) = name else {
+        return Err(Refusal::bad(format!("ops[{n}]: {op} needs a name")));
+    };
+    // Bringing a rule set back from the archive only makes the engine load it again: what has no class stays shown and
+    // never released or written, as it was before it went away.
+    if op != "archive_ruleset" {
+        return Ok(());
+    }
+    if !names_a_ruleset(held, name) {
+        if mentions_a_ruleset(held, name) {
+            return Err(Refusal {
+                status: StatusCode::NOT_FOUND,
+                code: "not_found",
+                message: format!("ops[{n}]: no rule set of that name is held"),
+            });
+        }
+        return Ok(());
+    }
+    if policy.shown(name) == Shown::Unclassified {
+        return Err(not_written(n));
+    }
+    Ok(())
+}
+
+/// Does the `source` of a file of the snapshot hold `name` as one of its first two parts (`<name>/...` or
+/// `<folder above>/<name>/...`, how the engine names a rule set whose name is taken)?
+fn mentions_a_ruleset(held: &Held, name: &str) -> bool {
+    held.files.as_ref().is_some_and(|files| {
+        files.iter().any(|f| {
+            f.path
+                .split('/')
+                .take(2)
+                .any(|part| part.eq_ignore_ascii_case(name))
+        })
+    })
 }
 
 /// Is `name` the name the held snapshot gives a rule set: the first one, or the start of the `source` of a file?
@@ -270,6 +337,13 @@ fn changed(document: &str) -> bool {
                     e.get("changed_ids")
                         .and_then(Value::as_array)
                         .is_some_and(|ids| !ids.is_empty())
+                        // A rule set that was made, archived or restored has no rule id to name.
+                        || (e.get("ruleset").is_some()
+                            && e.get("ok").and_then(Value::as_bool) == Some(true)
+                            && !e
+                                .get("outcome")
+                                .and_then(Value::as_str)
+                                .is_some_and(|o| o.starts_with("would_")))
                 })
             })
         })
@@ -348,6 +422,22 @@ pub(crate) async fn waivers(State(st): State<Arc<Shared>>, RawQuery(query): RawQ
     };
     let params = json!({ "project": project.to_string_lossy() });
     match ask(&rt, Calls::Waivers, Some(&params)).await {
+        Ok(reply) => json_response(StatusCode::OK, reply.text, None),
+        Err(response) => response,
+    }
+}
+
+/// `GET /api/rules/rulesets`: the rule sets that are loaded (an empty one too) and the ones in the archive of the vault
+/// (`rules.rulesets`), as the engine says it.
+pub(crate) async fn rulesets(State(st): State<Arc<Shared>>, RawQuery(query): RawQuery) -> Response {
+    if let Some(response) = no_query(query.as_deref()) {
+        return response;
+    }
+    let rt = st.rt();
+    if !rt.store.has_engine() {
+        return engine_unavailable(&rt);
+    }
+    match ask(&rt, Calls::Rulesets, None).await {
         Ok(reply) => json_response(StatusCode::OK, reply.text, None),
         Err(response) => response,
     }

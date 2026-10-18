@@ -26,6 +26,7 @@ const ERROR: &str = include_str!("fixtures/golden/error.json");
 const NEXT_ID: &str = include_str!("fixtures/golden/next_id.json");
 const RESULT: &str = include_str!("fixtures/golden/result.json");
 const WAIVERS: &str = include_str!("fixtures/golden/waivers.json");
+const RULESETS: &str = include_str!("fixtures/golden/rulesets.json");
 /// What the hub answers `sources` with for the golden snapshot; the page's tests answer with it.
 const HUB_SOURCES: &str = include_str!("fixtures/hub/sources.json");
 
@@ -109,6 +110,7 @@ impl Engine for FakeEngine {
                 }
                 "next_id" => NEXT_ID.trim_end().to_owned(),
                 "waivers" => WAIVERS.trim_end().to_owned(),
+                "rulesets" => RULESETS.trim_end().to_owned(),
                 "ops" => self.ops.lock().unwrap().clone(),
                 other => panic!("the fake engine was asked {other}"),
             };
@@ -260,6 +262,7 @@ async fn every_route_of_the_table_is_served_to_a_session_and_to_nobody_else() {
     assert_eq!(seen.get("about"), Some(&200));
     assert_eq!(seen.get("next_id"), Some(&200));
     assert_eq!(seen.get("waivers"), Some(&409));
+    assert_eq!(seen.get("rulesets"), Some(&200));
     // `search` without a query is a bad query, told by the route.
     assert_eq!(seen.get("search"), Some(&400));
 }
@@ -1535,6 +1538,87 @@ async fn a_waiver_operation_goes_with_the_project_of_the_device_and_never_with_o
     let r = bare.ops(&waive_body()).await;
     assert_eq!(r.status, 409, "{r:?}");
     assert_eq!(r.json()["error"]["code"], "no_project");
+}
+
+// ── the rule sets of the vault ───────────────────────────────────────────────────
+
+fn ruleset_body(op: &str, name: Option<&str>) -> String {
+    let mut entry = json!({ "op": op });
+    if let Some(name) = name {
+        entry["name"] = json!(name);
+    }
+    json!({ "ops": [entry] }).to_string()
+}
+
+/// A rule set made, archived or restored: no rule id, `ruleset` instead.
+const MADE: &str = r#"{"kind":"rules.result","ok":true,"dry_run":false,"results":[{"ok":true,"op":"create_ruleset","ruleset":"beta","changed_ids":[],"outcome":"created"}]}"#;
+const WOULD: &str = r#"{"kind":"rules.result","ok":true,"dry_run":true,"results":[{"ok":true,"op":"create_ruleset","ruleset":"beta","changed_ids":[],"outcome":"would_create"}]}"#;
+
+#[tokio::test]
+async fn a_rule_set_is_made_without_a_class_and_the_hub_reads_the_new_state() {
+    let engine = FakeEngine::new();
+    // Nothing is classified: making an empty rule set still goes (it is classified before anything is written into it).
+    let hub = start(&engine).await;
+    hub.get(&route("snapshot")).await;
+    assert_eq!(engine.count("snapshot"), 1);
+    *engine.ops.lock().unwrap() = MADE.to_owned();
+    let r = hub.ops(&ruleset_body("create_ruleset", Some("beta"))).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(
+        engine.count("snapshot"),
+        2,
+        "an entry with no rule id is a change too"
+    );
+    // A dry run changes nothing, and a name is needed.
+    *engine.ops.lock().unwrap() = WOULD.to_owned();
+    let dry = json!({ "dry_run": true, "ops": [{ "op": "create_ruleset", "name": "beta" }] });
+    assert_eq!(hub.ops(&dry.to_string()).await.status, 200);
+    assert_eq!(engine.count("snapshot"), 2);
+    let r = hub.ops(&ruleset_body("create_ruleset", None)).await;
+    assert_eq!(r.status, 400, "{r:?}");
+}
+
+#[tokio::test]
+async fn a_rule_set_with_rules_goes_to_the_archive_only_if_it_has_a_class_and_goes_alone() {
+    let engine = FakeEngine::new();
+    let hub = start_writable(&engine).await;
+    // Held and classified: passed on.
+    let r = hub
+        .ops(&ruleset_body("archive_ruleset", Some("Checklists")))
+        .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    // The snapshot does not mention it: it holds no rule, so nothing is protected, and the engine says whether it is there.
+    let r = hub
+        .ops(&ruleset_body("archive_ruleset", Some("elsewhere")))
+        .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let before = engine.count("ops");
+    // A name is needed, and the operation is alone in its request.
+    assert_eq!(
+        hub.ops(&ruleset_body("archive_ruleset", None)).await.status,
+        400
+    );
+    let mixed = json!({ "ops": [
+        { "op": "archive_ruleset", "name": "Checklists" },
+        { "op": "set", "id": "DEP-01", "patch": {} },
+    ]});
+    assert_eq!(hub.ops(&mixed.to_string()).await.status, 400);
+    assert_eq!(engine.count("ops"), before);
+
+    // No class for the rule set: it is not moved.
+    let other = Arc::new(SourcePolicy::new([("elsewhere".to_owned(), Class::Public)]).unwrap());
+    let closed = start_classified(Some(Arc::clone(&engine)), None, other, None).await;
+    let r = closed
+        .ops(&ruleset_body("archive_ruleset", Some("Checklists")))
+        .await;
+    assert_eq!(r.status, 403, "{r:?}");
+    assert_eq!(r.json()["error"]["code"], "write_refused");
+    assert_eq!(engine.count("ops"), before);
+    // Bringing one back needs no class: it is only loaded again.
+    let r = closed
+        .ops(&ruleset_body("restore_ruleset", Some("Checklists")))
+        .await;
+    assert_eq!(r.status, 200, "{r:?}");
 }
 
 // ── the data classes the page may change ────────────────────────────────────────

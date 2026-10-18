@@ -44,6 +44,7 @@ pub const ROUTES: &[(&str, MakeRoute)] = &[
     ("next_id", || get(crate::write::next_id)),
     ("ops", || post(crate::write::ops)),
     ("waivers", || get(crate::write::waivers)),
+    ("rulesets", || get(crate::write::rulesets)),
     ("sources/class", || post(crate::policy::set_class)),
 ];
 
@@ -371,6 +372,7 @@ mod tests {
                 "next_id",
                 "ops",
                 "waivers",
+                "rulesets",
                 "sources/class"
             ]
         );

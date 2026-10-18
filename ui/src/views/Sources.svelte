@@ -17,6 +17,7 @@
   const CLASSES: readonly Class[] = ['public', 'internal', 'private'];
   const doc = $derived(app.sources);
   let newKey = $state('');
+  let newRuleset = $state('');
   let newClass = $state<Class>('private');
 
   /** The first part of the sources of the files: a start for a key. */
@@ -35,6 +36,21 @@
     const written = await app.setClass({ ...target, class: pick(select) });
     if (!written) select.value = inForce;
   }
+
+  /** How many files the snapshot holds for a rule set (by the start of their source). */
+  function filesOf(name: string): number {
+    return (doc?.files ?? []).filter((f) => f.path.startsWith(`${name}/`)).length;
+  }
+
+  async function makeRuleset(): Promise<void> {
+    const name = newRuleset.trim();
+    if (name === '') return;
+    if (await app.makeRuleset(name)) newRuleset = '';
+  }
+
+  $effect(() => {
+    void app.loadRulesets();
+  });
 
   async function add(): Promise<void> {
     const key = newKey.trim();
@@ -61,6 +77,77 @@
         <button type="button" onclick={() => app.cancelClass()}>{t('classes.confirm_no')}</button>
       </div>
     </div>
+  {/if}
+
+  {#if app.archiveAsk !== null}
+    <div role="alertdialog" aria-label={t('rulesets.archive')} class="confirm">
+      <p><strong>{shownText(app.archiveAsk)}</strong>: {t('rulesets.archive_confirm')}</p>
+      <div class="row">
+        <button type="button" disabled={app.writing} onclick={() => void app.archiveRuleset()}>{t('rulesets.archive_yes')}</button>
+        <button type="button" onclick={() => app.cancelArchive()}>{t('classes.confirm_no')}</button>
+      </div>
+    </div>
+  {/if}
+
+  <h3>{t('rulesets.title')}</h3>
+  <p class="muted">{t('rulesets.hint')}</p>
+  {#if app.rulesets}
+    {#if app.rulesets.items.length === 0}
+      <p class="muted">{t('rulesets.empty')}</p>
+    {:else}
+      <table aria-label={t('rulesets.title')}>
+        <thead>
+          <tr>
+            <th scope="col">{t('rulesets.name')}</th>
+            <th scope="col">{t('rulesets.files')}</th>
+            <th scope="col"><span class="sr">{t('waiver.actions')}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each app.rulesets.items as item (item.folder)}
+            <tr id={`ruleset-${item.folder}`}>
+              <th scope="row"><code>{shownText(item.name)}</code></th>
+              <td>{filesOf(item.name)}</td>
+              <td>
+                {#if item.in_vault}
+                  <button type="button" disabled={app.writing} onclick={() => app.askArchive(item.folder)}>{t('rulesets.archive')}</button>
+                {:else}
+                  <span class="muted">{t('rulesets.outside')}</span>
+                {/if}
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {/if}
+
+    <form
+      class="add"
+      onsubmit={(event) => {
+        event.preventDefault();
+        void makeRuleset();
+      }}
+    >
+      <label>
+        {t('rulesets.create_name')}
+        <input type="text" bind:value={newRuleset} autocomplete="off" />
+      </label>
+      <div><button type="submit" disabled={app.writing || newRuleset.trim() === ''}>{t('rulesets.create')}</button></div>
+    </form>
+
+    <h4>{t('rulesets.archived')}</h4>
+    {#if app.rulesets.archived.length === 0}
+      <p class="muted">{t('rulesets.none_archived')}</p>
+    {:else}
+      <ul class="plain">
+        {#each app.rulesets.archived as folder (folder)}
+          <li id={`archived-${folder}`}>
+            <code>{shownText(folder)}</code>
+            <button type="button" disabled={app.writing} onclick={() => void app.restoreRuleset(folder)}>{t('rulesets.restore')}</button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
   {/if}
 
   {#if doc}

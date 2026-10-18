@@ -99,6 +99,13 @@ names, and the files that have no class at all. Pick another class in a row, **T
 the classes hold at once, also for what is written. If the change would **release more** than before, the page asks first
 (*Yes, release more* / *No*); tightening needs no question.
 
+The same view lists the **rule sets** of the vault. **Make a rule set** creates an empty one (a folder with `_rules/` and
+`_layouts/`; if the vault's `.rules.json` lists its rule sets, the new one is added to the list and nothing else of the file
+changes). **Archive** asks first, then moves the folder out of `rulesets/` into `archive/rulesets/` of the vault: it is never
+deleted, git keeps its history, and *Undo* (or **Restore** in the list of the archive) puts it back, byte for byte. A rule
+set that has no class on this device is not archived, the last one is not either, and a name that is taken is refused. The
+new rule set has no class yet: set one above before rules can be written into it.
+
 ## 6. Back and Forward
 
 Each view, and each rule you open, is an entry of the history of the tab. **Back** and **Forward** of the browser (or

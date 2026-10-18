@@ -75,7 +75,7 @@ pub fn cli_config(setup: &Setup, env: Env) -> CliEngineConfig {
 /// entry; it knows no call by name. `bodies` is not a call of the engine: it names the pages of rule
 /// text the search index asks for, answered inside the hub from `snapshot` and `rule`, and never
 /// sent. `ops` is the one that writes; its answer is a `rules.result`.
-static SPECS: [MethodSpec; 7] = [
+static SPECS: [MethodSpec; 8] = [
     MethodSpec::bare("hello", "rules.hello"),
     MethodSpec::bare("snapshot", "rules.snapshot"),
     MethodSpec::read("rule", "rules.rule"),
@@ -83,6 +83,7 @@ static SPECS: [MethodSpec; 7] = [
     MethodSpec::read("next_id", "rules.next_id"),
     MethodSpec::write("ops", "rules.result"),
     MethodSpec::read("waivers", "rules.waivers"),
+    MethodSpec::bare("rulesets", "rules.rulesets"),
 ];
 
 /// The calls of the rules engine, by name.
@@ -97,9 +98,10 @@ impl Calls {
     pub const NextId: Method = Method::new(&SPECS[4]);
     pub const Ops: Method = Method::new(&SPECS[5]);
     pub const Waivers: Method = Method::new(&SPECS[6]);
+    pub const Rulesets: Method = Method::new(&SPECS[7]);
 
     /// Every call of the table.
-    pub const ALL: [Method; 7] = [
+    pub const ALL: [Method; 8] = [
         Self::Hello,
         Self::Snapshot,
         Self::Rule,
@@ -107,6 +109,7 @@ impl Calls {
         Self::NextId,
         Self::Ops,
         Self::Waivers,
+        Self::Rulesets,
     ];
 
     /// Parse the name of a route or a request. Nothing else is accepted.
@@ -134,13 +137,13 @@ mod tests {
     }
 
     #[test]
-    fn hello_and_snapshot_take_no_parameters() {
+    fn hello_snapshot_and_rulesets_take_no_parameters() {
         let bare: Vec<_> = Calls::ALL
             .iter()
             .filter(|m| !m.takes_params())
             .map(|m| m.as_str())
             .collect();
-        assert_eq!(bare, ["hello", "snapshot"]);
+        assert_eq!(bare, ["hello", "snapshot", "rulesets"]);
     }
 
     #[test]

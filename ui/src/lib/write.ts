@@ -76,7 +76,8 @@ export function summarize(request: readonly Op[], result: Result): Outcome {
     if (!entry.ok) {
       const error = entry.error ?? {};
       const code = error.code ?? 'failed';
-      if (code === 'conflict') {
+      // A name that is taken is a refusal, not a clash of versions: there is no tag to compare.
+      if (code === 'conflict' && !isRulesetOp(request[entry.n - 1])) {
         out.conflicts.push({
           id: id ?? '',
           n: entry.n,
@@ -90,7 +91,8 @@ export function summarize(request: readonly Op[], result: Result): Outcome {
       continue;
     }
     if (entry.id) out.ids.push(entry.id);
-    if (result.dry_run || entry.changed_ids.length === 0) continue;
+    // A rule set that was made, moved or brought back has no rule id: its entry names the rule set instead.
+    if (result.dry_run || (entry.changed_ids.length === 0 && !entry.ruleset)) continue;
     out.saved += 1;
     out.changedIds.push(...entry.changed_ids);
     const inverse = entry.inverse;
@@ -199,6 +201,27 @@ export function renewOp(
 
 export function removeOp(id: string, ifMatch: string): Op {
   return { op: 'remove', id, if_match: ifMatch };
+}
+
+/** The operations on the rule sets of the vault. */
+export const RULESET_OPS: readonly string[] = ['create_ruleset', 'archive_ruleset', 'restore_ruleset'];
+
+export function isRulesetOp(op: Op | null | undefined): boolean {
+  return op !== null && op !== undefined && RULESET_OPS.includes(op.op);
+}
+
+/** Make an empty rule set (a folder of the vault). `name` is the folder name. */
+export function createRulesetOp(name: string): Op {
+  return { op: 'create_ruleset', name };
+}
+
+/** Move a rule set to the archive of the vault. It is never deleted; `restore_ruleset` brings it back. */
+export function archiveRulesetOp(name: string): Op {
+  return { op: 'archive_ruleset', name };
+}
+
+export function restoreRulesetOp(name: string): Op {
+  return { op: 'restore_ruleset', name };
 }
 
 /** Bring a retired rule back to the file it came from. */

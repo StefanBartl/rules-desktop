@@ -5,7 +5,7 @@
 import { takePairingCode, type HistoryLike, type LocationLike } from 'appkit-ui/pair';
 import { backoffSeconds, readStream, StreamRefused, type SseMessage } from 'appkit-ui/sse';
 import { ApiError, type ClassChange, type Hub, type HubSources } from './api';
-import type { Rule, RuleSummary, Snapshot, Waivers } from './contract';
+import type { Rule, RuleSummary, Rulesets, Snapshot, Waivers } from './contract';
 import { familyRows, type FamilyRow } from './families';
 import { applyFilter, emptyFilter, moveSelection, type Filter } from './filter';
 import { detectLang, isLang, type Key, type Lang } from './i18n';
@@ -15,9 +15,13 @@ import { classOf, sourceIndex } from './sources';
 import { retryOp } from './conflicts';
 import type { Body } from './edit';
 import {
+  archiveRulesetOp,
   clientOpId,
+  createRulesetOp,
+  isRulesetOp,
   isWaiverOp,
   nextOf,
+  restoreRulesetOp,
   retireOp,
   setOp,
   summarize,
@@ -771,6 +775,52 @@ export class App {
     this.classConfirm = null;
   }
 
+  // ── the rule sets of the vault ───────────────────────────────────────────
+
+  /** The rule sets that are loaded and the archived ones, as the engine says it; `null` until read. */
+  rulesets = $state.raw<Rulesets | null>(null);
+  /** The rule set the person is asked about before it goes to the archive (nothing is deleted). */
+  archiveAsk = $state<string | null>(null);
+
+  async loadRulesets(): Promise<void> {
+    try {
+      this.rulesets = await this.env.hub.rulesets();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) return;
+      this.rulesets = null;
+    }
+  }
+
+  /** Make an empty rule set. Returns whether it was made. */
+  async makeRuleset(name: string): Promise<boolean> {
+    const outcome = await this.write([createRulesetOp(name)]);
+    return outcome !== null && outcome.saved > 0 && outcome.failures.length === 0;
+  }
+
+  /** Ask before a rule set goes to the archive. */
+  askArchive(name: string): void {
+    this.archiveAsk = name;
+  }
+
+  cancelArchive(): void {
+    this.archiveAsk = null;
+  }
+
+  /** The person said yes: the rule set is moved to the archive; Undo brings it back. */
+  async archiveRuleset(): Promise<boolean> {
+    const name = this.archiveAsk;
+    this.archiveAsk = null;
+    if (name === null) return false;
+    const outcome = await this.write([archiveRulesetOp(name)]);
+    return outcome !== null && outcome.saved > 0 && outcome.failures.length === 0;
+  }
+
+  /** Bring a rule set back from the archive. */
+  async restoreRuleset(name: string): Promise<boolean> {
+    const outcome = await this.write([restoreRulesetOp(name)]);
+    return outcome !== null && outcome.saved > 0 && outcome.failures.length === 0;
+  }
+
   // ── the waivers of the project of the device ─────────────────────────────
 
   /** What the waivers file of the project says; `null` until it was read. */
@@ -850,6 +900,8 @@ export class App {
       this.reportWrite(outcome, options.undoable !== false);
       // The waivers file is not watched: read it again after a change of it, or after a clash (it says what it is now).
       if (ops.some(isWaiverOp)) await this.loadWaivers();
+      // The rule sets are not rules: no event of the stream tells they changed.
+      if (ops.some(isRulesetOp)) await this.loadRulesets();
       if (outcome.saved > 0) await this.afterWrite(outcome.changedIds);
       return outcome;
     } catch (error) {

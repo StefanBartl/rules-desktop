@@ -1,4 +1,4 @@
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { expectAccessible, violations, watchViolations } from './a11y';
@@ -574,4 +574,44 @@ test('a class is set, a change that releases more is asked first, and only sourc
   // finding of the console: those are expected here, nothing else is.
   const seen = consoleProblems.get(page) ?? [];
   seen.splice(0, seen.length, ...seen.filter((m) => !m.includes('409') && !m.includes('400')));
+});
+
+test('a rule set is made, moved to the archive and brought back, and nothing is deleted', async ({ page }) => {
+  await pair(page);
+  const vault = state().vault;
+  await page.keyboard.press('g');
+  await page.keyboard.press('s');
+  await expect(page.getByRole('table', { name: 'Rule sets' })).toBeVisible();
+
+  // Made: an empty folder pair, listed although no rule shows it.
+  await page.getByLabel('Name of the new rule set (the folder)', { exact: true }).fill('delta');
+  await page.getByRole('button', { name: 'Make a rule set', exact: true }).click();
+  const row = page.locator('tr#ruleset-delta');
+  await expect(row).toBeVisible();
+  expect(existsSync(join(vault, 'rulesets', 'delta', '_rules', '.gitkeep'))).toBe(true);
+  expect(existsSync(join(vault, 'rulesets', 'delta', '_layouts', '.gitkeep'))).toBe(true);
+
+  // Archived after a question; "No" moves nothing.
+  await row.getByRole('button', { name: 'Archive', exact: true }).click();
+  const ask = page.getByRole('alertdialog', { name: 'Archive' });
+  await expect(ask).toBeVisible();
+  await ask.getByRole('button', { name: 'No', exact: true }).click();
+  await expect(ask).toHaveCount(0);
+  expect(existsSync(join(vault, 'rulesets', 'delta'))).toBe(true);
+  await row.getByRole('button', { name: 'Archive', exact: true }).click();
+  await ask.getByRole('button', { name: 'Yes, archive', exact: true }).click();
+  await expect(row).toHaveCount(0);
+  await expect(page.locator('li#archived-delta')).toBeVisible();
+  expect(existsSync(join(vault, 'rulesets', 'delta'))).toBe(false);
+  expect(existsSync(join(vault, 'archive', 'rulesets', 'delta', '_rules', '.gitkeep'))).toBe(true);
+
+  // Undo brings it back; then it goes to the archive again and is restored from the list.
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(row).toBeVisible();
+  expect(existsSync(join(vault, 'rulesets', 'delta'))).toBe(true);
+  await row.getByRole('button', { name: 'Archive', exact: true }).click();
+  await ask.getByRole('button', { name: 'Yes, archive', exact: true }).click();
+  await page.locator('li#archived-delta').getByRole('button', { name: 'Restore' }).click();
+  await expect(row).toBeVisible();
+  expect(existsSync(join(vault, 'archive', 'rulesets', 'delta'))).toBe(false);
 });
