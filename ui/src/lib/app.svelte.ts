@@ -4,7 +4,7 @@
 
 import { takePairingCode, type HistoryLike, type LocationLike } from 'appkit-ui/pair';
 import { backoffSeconds, readStream, StreamRefused, type SseMessage } from 'appkit-ui/sse';
-import { ApiError, type Hub, type HubSources } from './api';
+import { ApiError, type ClassChange, type Hub, type HubSources } from './api';
 import type { Rule, RuleSummary, Snapshot, Waivers } from './contract';
 import { familyRows, type FamilyRow } from './families';
 import { applyFilter, emptyFilter, moveSelection, type Filter } from './filter';
@@ -28,10 +28,10 @@ import {
 
 export type Phase = 'starting' | 'needs_pairing' | 'offline' | 'unavailable' | 'ready';
 export type Connection = 'live' | 'reconnecting' | 'offline';
-export type View = 'overview' | 'families' | 'rules' | 'coverage' | 'waivers';
+export type View = 'overview' | 'families' | 'rules' | 'coverage' | 'waivers' | 'sources';
 export type Theme = 'auto' | 'light' | 'dark';
 
-export const VIEWS: readonly View[] = ['overview', 'families', 'rules', 'coverage', 'waivers'];
+export const VIEWS: readonly View[] = ['overview', 'families', 'rules', 'coverage', 'waivers', 'sources'];
 
 /**
  * A place the person can go back to: the view and the rule that is open in it. Filters, the search and the cursor are
@@ -732,6 +732,47 @@ export class App {
     return this.conflicts[0] ?? null;
   }
   private opCount = 0;
+
+  // ── the data classes ────────────────────────────────────────────────────
+
+  /** A change of a class that releases more than before: the hub wants the word of the person; shown until chosen. */
+  classConfirm = $state.raw<ClassChange | null>(null);
+
+  /** Read the classes of the files again (after a change of them). */
+  async reloadSources(): Promise<void> {
+    await this.readSources();
+  }
+
+  /**
+   * Change a data class. The hub says whether the change releases more than before (it knows the policy in force): then
+   * the person is asked and the change goes again with their word.
+   */
+  async setClass(change: ClassChange): Promise<void> {
+    this.classConfirm = null;
+    try {
+      await this.env.hub.setClass(change);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) return;
+      if (error instanceof ApiError && error.code === 'confirm_needed') {
+        this.classConfirm = change;
+        return;
+      }
+      this.notice = { key: 'classes.failed' };
+      return;
+    }
+    await this.readSources();
+    this.notice = { key: 'classes.saved' };
+  }
+
+  /** The person said yes to a change that releases more. */
+  async confirmClass(): Promise<void> {
+    const change = this.classConfirm;
+    if (change) await this.setClass({ ...change, confirm_loosen: true });
+  }
+
+  cancelClass(): void {
+    this.classConfirm = null;
+  }
 
   // ── the waivers of the project of the device ─────────────────────────────
 

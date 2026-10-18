@@ -42,11 +42,22 @@ export interface HubSources {
   kind: 'hub.sources';
   files: { path: string; data_class: DataClass; rules: number; key: string | null }[];
   keys: { key: string; class: Exclude<DataClass, 'unclassified'>; files: number }[];
+  /** The class of a file no key names; none: such a file is not classified. */
+  default: Exclude<DataClass, 'unclassified'> | null;
   unclassified: string[];
   private: string[];
 }
 
 /** A piece of a rule's text around a match; `marks` are `[start, end)` in UTF-16 units of `text`. */
+/** A change of a data class: one target (a key, or the default) and the class; `class` null takes it away. */
+export type ClassChange = (
+  | { key: string }
+  | { default: true }
+) & {
+  class: Exclude<DataClass, 'unclassified'> | null;
+  confirm_loosen?: boolean;
+};
+
 export interface SearchSnippet {
   text: string;
   marks: [number, number][];
@@ -210,6 +221,19 @@ export class Hub {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     });
+  }
+
+  /**
+   * Set the class of a key of `sources.json`, take the key away (`class` null), or do the same for the default. The
+   * hub refuses a change that releases more than before (`confirm_needed`, 409) until `confirm_loosen` is true.
+   */
+  async setClass(change: ClassChange): Promise<void> {
+    const response = await this.request(`${API}/sources/class`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(change),
+    });
+    if (!response.ok) throw await failure(response);
   }
 
   /** The waivers of the project of this device; a 409 `no_project` when the person set none. */

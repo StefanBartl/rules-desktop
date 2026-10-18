@@ -15,6 +15,7 @@
   import NewRule from './views/NewRule.svelte';
   import Palette from './views/Palette.svelte';
   import Rules from './views/Rules.svelte';
+  import Sources from './views/Sources.svelte';
   import Toast from './views/Toast.svelte';
   import Waivers from './views/Waivers.svelte';
 
@@ -173,6 +174,8 @@
           <Coverage {app} />
         {:else if app.view === 'waivers'}
           <Waivers {app} />
+        {:else if app.view === 'sources'}
+          <Sources {app} />
         {:else}
           <Rules {app} />
         {/if}
