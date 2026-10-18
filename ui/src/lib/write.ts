@@ -164,6 +164,43 @@ export function moveOp(id: string, place: { after: string } | { before: string }
   return { op: 'move', id, ...place };
 }
 
+/** The operations on the waivers of the project of the device. */
+export const WAIVER_OPS: readonly string[] = ['waive', 'renew', 'remove'];
+
+export function isWaiverOp(op: Op | null | undefined): boolean {
+  return op !== null && op !== undefined && WAIVER_OPS.includes(op.op);
+}
+
+/**
+ * Waive a rule in the project of the device (the hub names the project; the page never does). `ifMatch` is the tag of
+ * the waivers file the person saw. `paths` limits the waiver to those paths.
+ */
+export function waiveOp(
+  waiver: { id: string; reason: string; expires?: string; paths?: string[] },
+  ifMatch: string,
+): Op {
+  const op: Op = { op: 'waive', id: waiver.id, reason: waiver.reason, if_match: ifMatch };
+  if (waiver.expires) op['expires'] = waiver.expires;
+  if (waiver.paths && waiver.paths.length > 0) op['paths'] = waiver.paths;
+  return op;
+}
+
+/** Give a waiver a new last day (`expires`) or none (`no_expiry`), and maybe a new reason. */
+export function renewOp(
+  id: string,
+  end: { expires: string } | { no_expiry: true },
+  ifMatch: string,
+  reason?: string,
+): Op {
+  const op: Op = { op: 'renew', id, ...end, if_match: ifMatch };
+  if (reason) op['reason'] = reason;
+  return op;
+}
+
+export function removeOp(id: string, ifMatch: string): Op {
+  return { op: 'remove', id, if_match: ifMatch };
+}
+
 /** Bring a retired rule back to the file it came from. */
 export function reinstateOp(id: string): Op {
   return { op: 'reinstate', id };

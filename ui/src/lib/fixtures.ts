@@ -2,11 +2,12 @@
 // (crates/rules-hub/tests/fixtures/golden), not copied a second time: the one `cmp` in CI against the pinned engine
 // covers the hub and the page alike.
 
-import type { Error as EngineError, Rule, Snapshot } from './contract';
+import type { Error as EngineError, Rule, Snapshot, Waivers } from './contract';
 import type { HubSources } from './api';
 import goldenError from '../../../crates/rules-hub/tests/fixtures/golden/error.json';
 import goldenRule from '../../../crates/rules-hub/tests/fixtures/golden/rule.json';
 import goldenSnapshot from '../../../crates/rules-hub/tests/fixtures/golden/snapshot.json';
+import goldenWaivers from '../../../crates/rules-hub/tests/fixtures/golden/waivers.json';
 import hubSources from '../../../crates/rules-hub/tests/fixtures/hub/sources.json';
 
 /** A JSON import is typed by its values (`kind: string`); the kind is checked, then it is the contract's type. */
@@ -28,6 +29,11 @@ export function snapshotDoc(): Snapshot {
 /** `rules.rule` of DEP-01 with its text and its check. */
 export function ruleDoc(): Rule {
   return copy(ofKind<Rule>(goldenRule, 'rules.rule'));
+}
+
+/** `rules.waivers`: three waivers, one expired, one for a rule that is not loaded. */
+export function waiversDoc(): Waivers {
+  return copy(ofKind<Waivers>(goldenWaivers, 'rules.waivers'));
 }
 
 /** `rules.error`: not_found. */

@@ -135,7 +135,10 @@ export function prepareVault(): { root: string; vault: string; config: string } 
   }
   const config = join(root, 'config');
   mkdirSync(config);
-  writeFileSync(join(config, 'config.json'), JSON.stringify({ vault }));
+  // The project of the waivers: a folder of its own, outside the vault (the person's word about this device).
+  const project = join(root, 'project');
+  mkdirSync(project);
+  writeFileSync(join(config, 'config.json'), JSON.stringify({ vault, project }));
   writeFileSync(
     join(config, 'sources.json'),
     JSON.stringify({

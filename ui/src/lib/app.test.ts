@@ -725,3 +725,67 @@ describe('several rules at once and the conflict center', () => {
     expect(s.app.conflict?.id).toBe('DEP-01');
   });
 });
+
+describe('the waivers', () => {
+  const waive = { op: 'waive', id: 'DEP-01', reason: 'r', if_match: 'sha256:c23dd7021c9336a8' };
+
+  it('reads the waivers of the project and keeps the tag of the file', async () => {
+    const s = await ready();
+    await s.app.loadWaivers();
+    expect(s.app.waiversState).toBe('ready');
+    expect(s.app.waivers?.items.map((w) => w.id)).toEqual(['DEP-01', 'DEP-09', 'OLD-01']);
+    expect(s.app.waiversEtag()).toBe('sha256:c23dd7021c9336a8');
+  });
+
+  it('says there is no project when the person set none, and when the file cannot be used', async () => {
+    const s = await ready();
+    s.fake.waiversAnswer = () => ({ status: 409, body: { error: { code: 'no_project', message: 'no' } } });
+    await s.app.loadWaivers();
+    expect(s.app.waiversState).toBe('no_project');
+    expect(s.app.waivers).toBeNull();
+    s.fake.waiversAnswer = () => ({ status: 400, body: { error: { code: 'invalid_argument', message: 'no' } } });
+    await s.app.loadWaivers();
+    expect(s.app.waiversState).toBe('failed');
+  });
+
+  it('reads the file again after a change of it, with the tag it has then', async () => {
+    const s = await ready();
+    await s.app.loadWaivers();
+    const reads = s.fake.count('/api/rules/waivers');
+    await s.app.write([waive]);
+    expect(s.fake.opsRequests[0]?.ops).toEqual([waive]);
+    expect(s.fake.count('/api/rules/waivers')).toBe(reads + 1);
+  });
+
+  it('says the waivers file clashed, not a rule, and reads it again when the person looks', async () => {
+    const s = await ready();
+    await s.app.loadWaivers();
+    s.fake.opsAnswer = () => ({
+      status: 200,
+      body: {
+        kind: 'rules.result',
+        dry_run: false,
+        ok: false,
+        results: [{ n: 1, ok: false, op: 'waive', id: 'DEP-01', changed_ids: [], error: { code: 'conflict', details: { expected: 'a', actual: 'b' } } }],
+      },
+    });
+    const rules = s.fake.count('/api/rules/rule');
+    await s.app.write([waive]);
+    expect(s.app.notice).toEqual({ key: 'write.conflict_waivers' });
+    // No rule is read for the center: the clash is about the file of the project.
+    expect(s.fake.count('/api/rules/rule')).toBe(rules);
+    const reads = s.fake.count('/api/rules/waivers');
+    await s.app.resolveConflict('view');
+    expect(s.app.view).toBe('waivers');
+    expect(s.fake.count('/api/rules/waivers')).toBe(reads + 1);
+    // It is not offered to write it again onto the new version: that is for the rules.
+    expect(s.app.conflict).toBeNull();
+  });
+
+  it('starts a waiver for a rule in the view of the waivers', async () => {
+    const s = await ready();
+    s.app.startWaiver('DEP-01');
+    expect(s.app.view).toBe('waivers');
+    expect(s.app.waiveDraft).toBe('DEP-01');
+  });
+});

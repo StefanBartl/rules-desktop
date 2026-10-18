@@ -82,6 +82,15 @@ is not touched).
 changed next to what the file says now. You choose: write your change onto the new version (the other change stays, only
 the lines you changed move), look at the rule, or drop your change. The page never merges for you.
 
+## 5b. Waivers (`g w`)
+
+A waiver says that a finding is known and accepted for now. It is kept in the `.rules-waivers.json` of the project you set in
+`config.json` (`project`), not in a rule set. The view lists the waivers with their reason, last day and paths, and marks the
+expired ones and those for a rule that is not loaded. **Waive** takes a rule (the *Waive …* button of an open rule fills it), a
+reason and, usually, a last day. **Renew …** gives a new last day or none; **Remove** drops it. *Saved.* offers **Undo**. The
+engine writes the file as a whole with the keys sorted, so an untouched entry may move; a change made to the file by someone
+else meanwhile is a clash and nothing is written.
+
 ## 6. Back and Forward
 
 Each view, and each rule you open, is an entry of the history of the tab. **Back** and **Forward** of the browser (or

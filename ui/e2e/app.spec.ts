@@ -34,7 +34,7 @@ async function pair(page: Page): Promise<void> {
   await expect(page.getByRole('status').filter({ hasText: 'live' })).toBeVisible();
 }
 
-async function view(page: Page, name: 'Overview' | 'Families' | 'Rules' | 'Coverage'): Promise<void> {
+async function view(page: Page, name: 'Overview' | 'Families' | 'Rules' | 'Coverage' | 'Waivers'): Promise<void> {
   await page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
 }
 
@@ -218,6 +218,9 @@ for (const scheme of ['light', 'dark'] as const) {
     await view(page, 'Coverage');
     await expect(page.getByRole('table', { name: 'By family' })).toBeVisible();
     await expectAccessible(page, `coverage ${scheme}`);
+    await view(page, 'Waivers');
+    await expect(page.getByText('No waiver in this project.')).toBeVisible();
+    await expectAccessible(page, `waivers ${scheme}`);
     await view(page, 'Rules');
     await expect(page.locator('tr#rule-AA-01')).toBeVisible();
     await expectAccessible(page, `rules ${scheme}`);
@@ -476,4 +479,42 @@ test('the coverage shows how the rules apply per family, and a row opens the lis
   await table.getByRole('button', { name: 'BB', exact: true }).click();
   await expect(page.locator('tr#rule-BB-01')).toBeVisible();
   await expect(page.locator('tr#rule-AA-01')).toHaveCount(0);
+});
+
+test('a waiver is made, renewed, taken back and removed in the project of the device, and only its file moves', async ({ page }) => {
+  await pair(page);
+  const file = join(state().config, '..', 'project', '.rules-waivers.json');
+  await page.keyboard.press('g');
+  await page.keyboard.press('w');
+  await expect(page.getByRole('heading', { name: 'Waivers' })).toBeVisible();
+  await expect(page.getByText('No waiver in this project.')).toBeVisible();
+
+  // Waive: the file of the project appears, written whole with the keys sorted.
+  await page.getByLabel('Rule', { exact: true }).fill('WR-01');
+  await page.getByLabel('Reason', { exact: true }).fill('legacy until the rewrite');
+  await page.getByLabel('Last day (YYYY-MM-DD)', { exact: true }).fill('2099-12-31');
+  await page.getByRole('button', { name: 'Waive', exact: true }).click();
+  const row = page.locator('tr#waiver-WR-01');
+  await expect(row).toBeVisible();
+  await expect(row).toContainText('2099-12-31');
+  await expect(row).toContainText('valid');
+  const waived = '{\n  "WR-01": {\n    "expires": "2099-12-31",\n    "reason": "legacy until the rewrite"\n  }\n}\n';
+  expect(readFileSync(file, 'utf8')).toBe(waived);
+
+  // Renew without an end: the short form of the file.
+  await row.getByRole('button', { name: 'Renew …' }).click();
+  await page.getByLabel('No last day').check();
+  await page.getByRole('button', { name: 'Renew', exact: true }).click();
+  await expect(row).toContainText('no end');
+  expect(readFileSync(file, 'utf8')).toBe('{\n  "WR-01": "legacy until the rewrite"\n}\n');
+
+  // Undo brings the last day back, byte for byte.
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(row).toContainText('2099-12-31');
+  expect(readFileSync(file, 'utf8')).toBe(waived);
+
+  // Remove: the file keeps an empty object.
+  await row.getByRole('button', { name: 'Remove' }).click();
+  await expect(page.getByText('No waiver in this project.')).toBeVisible();
+  expect(readFileSync(file, 'utf8')).toBe('{}\n');
 });

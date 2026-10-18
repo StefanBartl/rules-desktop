@@ -1,7 +1,7 @@
 // The hub's routes, as typed calls. Only the shapes the page needs. Every request carries the session as a bearer
 // token and nothing else: no cookie, no cache, no referrer.
 
-import type { NextId, Result, Rule, Snapshot } from './contract';
+import type { NextId, Result, Rule, Snapshot, Waivers } from './contract';
 import type { OpsRequest } from './write';
 
 /** Where the routes of this app live (`IDENTITY.route` of rules-hub). */
@@ -210,6 +210,11 @@ export class Hub {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     });
+  }
+
+  /** The waivers of the project of this device; a 409 `no_project` when the person set none. */
+  waivers(): Promise<Waivers> {
+    return this.json<Waivers>(`${API}/waivers`);
   }
 
   /** The next free id of a family, or of every family: the engine says it, nothing is reserved. */

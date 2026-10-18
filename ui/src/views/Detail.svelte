@@ -79,6 +79,7 @@
       <p class="note">{t('edit.no_class')}</p>
     {:else}
       <button type="button" onclick={() => (editing = true)}>{t('edit.open')}</button>
+      <button type="button" onclick={() => app.startWaiver(rule.id)}>{t('waiver.start')}</button>
       {#if !rule.editable}<p class="note">{t('detail.not_editable')}</p>{/if}
     {/if}
     {#if holdsHidden(rule.text) || holdsHidden(rule.title)}<p class="note">{t('detail.hidden')}</p>{/if}

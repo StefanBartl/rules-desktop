@@ -6,6 +6,7 @@
   import { retryOp, rowsOf } from '../lib/conflicts';
   import { translate, type Key } from '../lib/i18n';
   import { shownText } from '../lib/ruletext';
+  import { isWaiverOp } from '../lib/write';
 
   let { app }: { app: App } = $props();
   const t = (key: Key, params: Record<string, string | number> = {}) => translate(app.lang, key, params);
@@ -32,7 +33,7 @@
 >
   {#if conflict}
     <h2>{t('conflict.label')}</h2>
-    <p>{t('conflict.hint', { id: shownText(conflict.id) })}</p>
+    <p>{isWaiverOp(conflict.op) ? t('conflict.hint_waivers') : t('conflict.hint', { id: shownText(conflict.id) })}</p>
     {#if app.conflicts.length > 1}<p class="muted">{t('conflict.more', { n: app.conflicts.length - 1 })}</p>{/if}
     {#if rows.length > 0}
       <table>
@@ -58,7 +59,9 @@
       {#if canRetry}
         <button type="button" disabled={app.writing} onclick={() => void app.resolveConflict('retry')}>{t('conflict.retry')}</button>
       {/if}
-      <button type="button" onclick={() => void app.resolveConflict('view')}>{t('conflict.view')}</button>
+      <button type="button" onclick={() => void app.resolveConflict('view')}>
+        {isWaiverOp(conflict.op) ? t('conflict.view_waivers') : t('conflict.view')}
+      </button>
       <button type="button" onclick={() => void app.resolveConflict('drop')}>{t('conflict.drop')}</button>
     </div>
   {/if}

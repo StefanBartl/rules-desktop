@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import type { Result } from './contract';
-import { clientOpId, newOp, nextOf, reinstateOp, retireOp, setOp, summarize, type Op } from './write';
+import {
+  clientOpId,
+  isWaiverOp,
+  newOp,
+  nextOf,
+  reinstateOp,
+  removeOp,
+  renewOp,
+  retireOp,
+  setOp,
+  summarize,
+  waiveOp,
+  type Op,
+} from './write';
 import type { NextId } from './contract';
 
 /** An answer of the engine with the entries a test names. */
@@ -157,5 +170,46 @@ describe('a new rule', () => {
     );
     expect(out.ids).toEqual(['DEP-10']);
     expect(out.saved).toBe(0);
+  });
+});
+
+describe('the operations on the waivers', () => {
+  it('always carry the tag of the waivers file the person read, and leave out what is empty', () => {
+    expect(waiveOp({ id: 'DEP-01', reason: 'legacy' }, 'sha256:1')).toEqual({
+      op: 'waive',
+      id: 'DEP-01',
+      reason: 'legacy',
+      if_match: 'sha256:1',
+    });
+    expect(waiveOp({ id: 'DEP-01', reason: 'r', expires: '2027-01-31', paths: ['src', 'docs/**'] }, 'sha256:1')).toEqual({
+      op: 'waive',
+      id: 'DEP-01',
+      reason: 'r',
+      expires: '2027-01-31',
+      paths: ['src', 'docs/**'],
+      if_match: 'sha256:1',
+    });
+    expect(waiveOp({ id: 'A-1', reason: 'r', expires: '', paths: [] }, 't')).not.toHaveProperty('expires');
+    expect(renewOp('DEP-01', { expires: '2028-01-01' }, 'sha256:1')).toEqual({
+      op: 'renew',
+      id: 'DEP-01',
+      expires: '2028-01-01',
+      if_match: 'sha256:1',
+    });
+    expect(renewOp('DEP-01', { no_expiry: true }, 'sha256:1', 'still needed')).toEqual({
+      op: 'renew',
+      id: 'DEP-01',
+      no_expiry: true,
+      reason: 'still needed',
+      if_match: 'sha256:1',
+    });
+    expect(removeOp('DEP-01', 'sha256:1')).toEqual({ op: 'remove', id: 'DEP-01', if_match: 'sha256:1' });
+  });
+
+  it('are told from the operations on rules', () => {
+    expect(isWaiverOp(waiveOp({ id: 'A-1', reason: 'r' }, 't'))).toBe(true);
+    expect(isWaiverOp(removeOp('A-1', 't'))).toBe(true);
+    expect(isWaiverOp(setOp('A-1', {}, 't'))).toBe(false);
+    expect(isWaiverOp(null)).toBe(false);
   });
 });

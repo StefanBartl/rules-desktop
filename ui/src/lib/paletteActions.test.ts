@@ -14,6 +14,7 @@ describe('the actions of the palette', () => {
       'go.families',
       'go.rules',
       'go.coverage',
+      'go.waivers',
       'rescan',
       'rule.new',
       'shortcuts.off',
@@ -31,7 +32,7 @@ describe('the actions of the palette', () => {
     a.setShortcuts(false);
     a.setFilter({ families: ['DEP'], severities: [], checkKinds: [], query: '' });
     const keys = paletteActions(a).map((x) => x.key);
-    expect(keys).toEqual(['go.overview', 'go.families', 'go.coverage', 'rescan', 'rule.new', 'filter.reset', 'shortcuts.on', 'lang.en', 'theme.auto', 'theme.light']);
+    expect(keys).toEqual(['go.overview', 'go.families', 'go.coverage', 'go.waivers', 'rescan', 'rule.new', 'filter.reset', 'shortcuts.on', 'lang.en', 'theme.auto', 'theme.light']);
     expect(paletteActions(a).find((x) => x.key === 'go.overview')?.label).toBe('Gehe zu: Übersicht');
   });
 

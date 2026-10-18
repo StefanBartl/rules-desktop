@@ -5,7 +5,7 @@
 import { takePairingCode, type HistoryLike, type LocationLike } from 'appkit-ui/pair';
 import { backoffSeconds, readStream, StreamRefused, type SseMessage } from 'appkit-ui/sse';
 import { ApiError, type Hub, type HubSources } from './api';
-import type { Rule, RuleSummary, Snapshot } from './contract';
+import type { Rule, RuleSummary, Snapshot, Waivers } from './contract';
 import { familyRows, type FamilyRow } from './families';
 import { applyFilter, emptyFilter, moveSelection, type Filter } from './filter';
 import { detectLang, isLang, type Key, type Lang } from './i18n';
@@ -14,14 +14,24 @@ import { bumped, parseFrecency, type Frecency, type PaletteItem } from './palett
 import { classOf, sourceIndex } from './sources';
 import { retryOp } from './conflicts';
 import type { Body } from './edit';
-import { clientOpId, nextOf, retireOp, setOp, summarize, type Conflict, type Op, type Outcome } from './write';
+import {
+  clientOpId,
+  isWaiverOp,
+  nextOf,
+  retireOp,
+  setOp,
+  summarize,
+  type Conflict,
+  type Op,
+  type Outcome,
+} from './write';
 
 export type Phase = 'starting' | 'needs_pairing' | 'offline' | 'unavailable' | 'ready';
 export type Connection = 'live' | 'reconnecting' | 'offline';
-export type View = 'overview' | 'families' | 'rules' | 'coverage';
+export type View = 'overview' | 'families' | 'rules' | 'coverage' | 'waivers';
 export type Theme = 'auto' | 'light' | 'dark';
 
-export const VIEWS: readonly View[] = ['overview', 'families', 'rules', 'coverage'];
+export const VIEWS: readonly View[] = ['overview', 'families', 'rules', 'coverage', 'waivers'];
 
 /**
  * A place the person can go back to: the view and the rule that is open in it. Filters, the search and the cursor are
@@ -723,6 +733,37 @@ export class App {
   }
   private opCount = 0;
 
+  // ── the waivers of the project of the device ─────────────────────────────
+
+  /** What the waivers file of the project says; `null` until it was read. */
+  waivers = $state.raw<Waivers | null>(null);
+  /** `no_project`: the person set none (config.json); `failed`: the engine could not read the file. */
+  waiversState = $state<'idle' | 'ready' | 'no_project' | 'failed'>('idle');
+  /** The rule a "Waive …" button was pressed for: the form of the waivers view starts with its id. */
+  waiveDraft = $state<string | null>(null);
+
+  async loadWaivers(): Promise<void> {
+    try {
+      this.waivers = await this.env.hub.waivers();
+      this.waiversState = 'ready';
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) return;
+      this.waivers = null;
+      this.waiversState = error instanceof ApiError && error.code === 'no_project' ? 'no_project' : 'failed';
+    }
+  }
+
+  /** Waive a rule: go to the waivers with its id in the form. */
+  startWaiver(id: string): void {
+    this.waiveDraft = id;
+    this.view = 'waivers';
+  }
+
+  /** The tag of the waivers file the person saw: what a change must be sent with. */
+  waiversEtag(): string | null {
+    return this.waivers?.etag ?? null;
+  }
+
   /** The dialog for a new rule is open. */
   newRuleOpen = $state(false);
 
@@ -769,6 +810,8 @@ export class App {
       const outcome = summarize(ops, result);
       if (dryRun) return outcome;
       this.reportWrite(outcome, options.undoable !== false);
+      // The waivers file is not watched: read it again after a change of it, or after a clash (it says what it is now).
+      if (ops.some(isWaiverOp)) await this.loadWaivers();
       if (outcome.saved > 0) await this.afterWrite(outcome.changedIds);
       return outcome;
     } catch (error) {
@@ -789,8 +832,10 @@ export class App {
     this.conflicts = outcome.conflicts;
     this.conflictRule = null;
     if (first) {
-      void this.readConflictRule(first.id);
-      this.notice = { key: 'write.conflict', params: { id: first.id } };
+      if (!isWaiverOp(first.op)) void this.readConflictRule(first.id);
+      this.notice = isWaiverOp(first.op)
+        ? { key: 'write.conflict_waivers' }
+        : { key: 'write.conflict', params: { id: first.id } };
     } else if (outcome.failures[0]) {
       this.notice = { key: 'write.failed', params: { message: outcome.failures[0].message || outcome.failures[0].code } };
     } else if (outcome.saved > 1) {
@@ -835,7 +880,7 @@ export class App {
     this.conflicts = this.conflicts.slice(1);
     this.conflictRule = null;
     const next = this.conflict;
-    if (next) void this.readConflictRule(next.id);
+    if (next && !isWaiverOp(next.op)) void this.readConflictRule(next.id);
   }
 
   /**
@@ -851,8 +896,13 @@ export class App {
       if (op) await this.write([op]);
     } else if (choice === 'view') {
       this.clearConflict();
-      this.setView('rules');
-      await this.openDetail(conflict.id);
+      if (isWaiverOp(conflict.op)) {
+        this.view = 'waivers';
+        await this.loadWaivers();
+      } else {
+        this.setView('rules');
+        await this.openDetail(conflict.id);
+      }
     } else {
       this.clearConflict();
     }

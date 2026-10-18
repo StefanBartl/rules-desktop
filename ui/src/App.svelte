@@ -16,6 +16,7 @@
   import Palette from './views/Palette.svelte';
   import Rules from './views/Rules.svelte';
   import Toast from './views/Toast.svelte';
+  import Waivers from './views/Waivers.svelte';
 
   let { app, code = null }: { app: App; code?: string | null } = $props();
 
@@ -170,6 +171,8 @@
           <Families {app} />
         {:else if app.view === 'coverage'}
           <Coverage {app} />
+        {:else if app.view === 'waivers'}
+          <Waivers {app} />
         {:else}
           <Rules {app} />
         {/if}

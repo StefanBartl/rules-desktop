@@ -3,7 +3,7 @@
 
 import { Hub } from './api';
 import type { Env } from './app.svelte';
-import { errorDoc, goldenText, hubSourcesDoc, snapshotDoc } from './fixtures';
+import { errorDoc, goldenText, hubSourcesDoc, snapshotDoc, waiversDoc } from './fixtures';
 
 export const CODE = 'ab'.repeat(16);
 export const TOKEN = 'token-1';
@@ -43,6 +43,8 @@ export class FakeHub {
   goneIds = new Set<string>();
   /** open answers with this status (200: the editor is started). */
   openStatus = 200;
+  /** What `waivers` answers: a status and a document (default: the golden waivers of a project). */
+  waiversAnswer: () => { status: number; body: unknown } = () => ({ status: 200, body: waiversDoc() });
   /** The requests of `ops` the hub was sent, as parsed. */
   opsRequests: { dry_run: boolean; ops: Record<string, unknown>[] }[] = [];
   /** What `ops` answers for a request: a status and a document (default: every operation changed its rule). */
@@ -132,6 +134,10 @@ export class FakeHub {
         });
       case '/api/rules/rescan':
         return new Response(null, { status: 202 });
+      case '/api/rules/waivers': {
+        const answer = this.waiversAnswer();
+        return json(answer.body, answer.status);
+      }
       case '/api/rules/ops': {
         const request = JSON.parse(String(init.body)) as (typeof this.opsRequests)[number];
         this.opsRequests.push(request);
