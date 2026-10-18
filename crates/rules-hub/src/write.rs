@@ -8,12 +8,13 @@
 
 use std::sync::Arc;
 
-use appkit_hub::{error_body, json_response, too_many};
+use appkit_hub::{error_body, json_response, no_query, too_many};
 use axum::body::Bytes;
 use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use serde_json::{json, Value};
+use std::path::Path;
 
 use crate::answer::{ask, engine_failure, engine_unavailable};
 use crate::engine::Calls;
@@ -27,10 +28,21 @@ pub const OPS_FIELDS: [&str; 4] = ["schema", "client_op_id", "dry_run", "ops"];
 /// The most operations in one request (the engine's limit too).
 pub const OPS_MAX: usize = 100;
 
-/// The operations the page may ask for. `waive`, `renew` and `remove` are the engine's too, but
-/// they write the waiver file of a project and not a rule set: that is a later phase, and the hub
-/// does not pass them on.
-pub const OPS_ALLOWED: [&str; 5] = ["new", "set", "retire", "reinstate", "move"];
+/// The operations the page may ask for. `waive`, `renew` and `remove` write the waiver file of the
+/// project of this device and not a rule set: the hub puts the project in itself (`with_project`).
+pub const OPS_ALLOWED: [&str; 8] = [
+    "new",
+    "set",
+    "retire",
+    "reinstate",
+    "move",
+    "waive",
+    "renew",
+    "remove",
+];
+
+/// The operations on the waivers of a project.
+pub const WAIVER_OPS: [&str; 3] = ["waive", "renew", "remove"];
 
 /// The form and the size of a request of `ops`, before an engine process is asked: what is plainly
 /// not one is refused here, the rules of the rules are the engine's. Returns the request to send on.
@@ -119,6 +131,14 @@ pub(crate) fn authorize(
         let n = i + 1;
         let text = |key: &str| op.get(key).and_then(Value::as_str);
         let name = text("op").unwrap_or_default();
+        if WAIVER_OPS.contains(&name) {
+            // A waiver is the project's: it needs the project of the device (put in later) and a rule id, and no class
+            // of a rule set (the person's word is the configured project). The engine says whether the rule exists.
+            if text("id").is_none() {
+                return Err(Refusal::bad(format!("ops[{n}]: {name} needs an id")));
+            }
+            continue;
+        }
         let source = if name == "new" {
             let ruleset = match op.get("ruleset") {
                 None | Some(Value::Null) => held.first_ruleset.as_deref(),
@@ -181,6 +201,54 @@ fn names_a_ruleset(held: &Held, name: &str) -> bool {
         })
 }
 
+/// The request with the project of this device in every waiver operation. The page never names a folder: a `project`
+/// of the page, in any operation, is refused (a page with a session could otherwise make the engine write
+/// `.rules-waivers.json` into any folder of the machine), and a waiver operation without a configured project is a 409.
+///
+/// # Errors
+///
+/// The refusal, without a path.
+pub(crate) fn with_project(request: &Value, project: Option<&Path>) -> Result<Value, Refusal> {
+    let mut out = request.clone();
+    let ops = out
+        .get_mut("ops")
+        .and_then(Value::as_array_mut)
+        .map_or(&mut [][..], Vec::as_mut_slice);
+    for (i, op) in ops.iter_mut().enumerate() {
+        let n = i + 1;
+        let waiver = op
+            .get("op")
+            .and_then(Value::as_str)
+            .is_some_and(|name| WAIVER_OPS.contains(&name));
+        let Some(map) = op.as_object_mut() else {
+            continue;
+        };
+        if map.contains_key("project") {
+            return Err(Refusal::bad(format!(
+                "ops[{n}]: the project is the hub's to set, not the page's"
+            )));
+        }
+        if waiver {
+            let Some(project) = project else {
+                return Err(no_project());
+            };
+            map.insert(
+                "project".to_owned(),
+                Value::String(project.to_string_lossy().into_owned()),
+            );
+        }
+    }
+    Ok(out)
+}
+
+fn no_project() -> Refusal {
+    Refusal {
+        status: StatusCode::CONFLICT,
+        code: "no_project",
+        message: "no project is set for the waivers (project in config.json)".to_owned(),
+    }
+}
+
 fn not_written(n: usize) -> Refusal {
     Refusal {
         status: StatusCode::FORBIDDEN,
@@ -239,6 +307,11 @@ pub(crate) async fn ops(State(st): State<Arc<Shared>>, body: Bytes) -> Response 
     let Some(held) = rt.held(&cached) else {
         return no_snapshot();
     };
+    // The project first: a folder of the page is refused whatever else is wrong with the request.
+    let request = match with_project(&request, rt.project.as_deref()) {
+        Ok(r) => r,
+        Err(refusal) => return error_body(refusal.status, refusal.code, &refusal.message),
+    };
     if let Err(refusal) = authorize(&rt.sources, &held, &request) {
         return error_body(refusal.status, refusal.code, &refusal.message);
     }
@@ -257,6 +330,27 @@ pub(crate) async fn ops(State(st): State<Arc<Shared>>, body: Bytes) -> Response 
         let _ = rt.store.refresh("ops").await;
     }
     json_response(StatusCode::OK, reply.text, None)
+}
+
+/// `GET /api/rules/waivers`: the waivers of the project of this device (`rules.waivers`), as the engine says it. The
+/// page names no project; without one set the answer is a 409 that says so.
+pub(crate) async fn waivers(State(st): State<Arc<Shared>>, RawQuery(query): RawQuery) -> Response {
+    if let Some(response) = no_query(query.as_deref()) {
+        return response;
+    }
+    let rt = st.rt();
+    if !rt.store.has_engine() {
+        return engine_unavailable(&rt);
+    }
+    let Some(project) = &rt.project else {
+        let refusal = no_project();
+        return error_body(refusal.status, refusal.code, &refusal.message);
+    };
+    let params = json!({ "project": project.to_string_lossy() });
+    match ask(&rt, Calls::Waivers, Some(&params)).await {
+        Ok(reply) => json_response(StatusCode::OK, reply.text, None),
+        Err(response) => response,
+    }
 }
 
 /// The longest family the page asks about: the engine takes 1 to 12 letters for a new one, and a
@@ -346,15 +440,47 @@ mod tests {
     }
 
     #[test]
-    fn the_waiver_operations_are_not_served() {
-        for op in ["waive", "renew", "remove"] {
+    fn the_waiver_operations_are_served_and_others_still_are_not() {
+        for op in WAIVER_OPS {
             let body = json!({"ops": [{"op": op}]}).to_string();
+            assert!(check_ops_request(body.as_bytes()).is_ok(), "{op}");
+        }
+        assert_eq!(
+            refused(&json!({"ops": [{"op": "expire"}]}).to_string()),
+            "ops[1]: this operation is not served"
+        );
+    }
+
+    #[test]
+    fn the_hub_puts_the_project_into_a_waiver_operation_and_refuses_one_from_the_page() {
+        let project = std::env::temp_dir();
+        let request = json!({"ops": [
+            {"op": "set", "id": "A-1", "patch": {}},
+            {"op": "waive", "id": "A-1", "reason": "r"},
+            {"op": "remove", "id": "A-2"},
+        ]});
+        let out = with_project(&request, Some(&project)).unwrap();
+        assert!(
+            out["ops"][0].get("project").is_none(),
+            "a rule operation has none"
+        );
+        assert_eq!(out["ops"][1]["project"], project.to_string_lossy().as_ref());
+        assert_eq!(out["ops"][2]["project"], project.to_string_lossy().as_ref());
+        // The page's own `project` is refused, in a waiver operation and in any other.
+        for op in ["waive", "set"] {
+            let named = json!({"ops": [{"op": op, "id": "A-1", "project": "C:/elsewhere"}]});
+            let why = with_project(&named, Some(&project)).unwrap_err();
             assert_eq!(
-                refused(&body),
-                "ops[1]: this operation is not served",
+                (why.status, why.code),
+                (StatusCode::BAD_REQUEST, "bad_request"),
                 "{op}"
             );
         }
+        // No project set: a waiver is a 409, a rule operation is not affected.
+        let why = with_project(&request, None).unwrap_err();
+        assert_eq!((why.status, why.code), (StatusCode::CONFLICT, "no_project"));
+        let only_rules = json!({"ops": [{"op": "set", "id": "A-1", "patch": {}}]});
+        assert!(with_project(&only_rules, None).is_ok());
     }
 
     #[test]

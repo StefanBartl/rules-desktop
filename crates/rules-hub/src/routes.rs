@@ -43,6 +43,7 @@ pub const ROUTES: &[(&str, MakeRoute)] = &[
     ("open", || post(open)),
     ("next_id", || get(crate::write::next_id)),
     ("ops", || post(crate::write::ops)),
+    ("waivers", || get(crate::write::waivers)),
 ];
 
 /// The router of the app, built from [`ROUTES`] and from nothing else. Invariant: this stays a
@@ -359,7 +360,7 @@ mod tests {
             names,
             [
                 "snapshot", "rule", "sources", "about", "events", "search", "rescan", "open",
-                "next_id", "ops"
+                "next_id", "ops", "waivers"
             ]
         );
     }

@@ -25,6 +25,7 @@ const RULE: &str = include_str!("fixtures/golden/rule.json");
 const ERROR: &str = include_str!("fixtures/golden/error.json");
 const NEXT_ID: &str = include_str!("fixtures/golden/next_id.json");
 const RESULT: &str = include_str!("fixtures/golden/result.json");
+const WAIVERS: &str = include_str!("fixtures/golden/waivers.json");
 /// What the hub answers `sources` with for the golden snapshot; the page's tests answer with it.
 const HUB_SOURCES: &str = include_str!("fixtures/hub/sources.json");
 
@@ -107,6 +108,7 @@ impl Engine for FakeEngine {
                     self.rule.lock().unwrap().clone()
                 }
                 "next_id" => NEXT_ID.trim_end().to_owned(),
+                "waivers" => WAIVERS.trim_end().to_owned(),
                 "ops" => self.ops.lock().unwrap().clone(),
                 other => panic!("the fake engine was asked {other}"),
             };
@@ -133,6 +135,7 @@ fn ready() -> HubStatus {
             "rule".into(),
             "next_id".into(),
             "ops".into(),
+            "waivers".into(),
         ],
     }
 }
@@ -171,6 +174,17 @@ async fn start_limited(
     watch: Option<Watch>,
     editor: Option<rules_hub::Editor>,
 ) -> Hub {
+    start_all(engine, limits, sources, watch, editor, None).await
+}
+
+async fn start_all(
+    engine: Option<Arc<FakeEngine>>,
+    limits: Limits,
+    sources: Arc<SourcePolicy>,
+    watch: Option<Watch>,
+    editor: Option<rules_hub::Editor>,
+    project: Option<std::path::PathBuf>,
+) -> Hub {
     let control = Secret::generate(TOKEN_BYTES).unwrap();
     let server = rules_hub::start(rules_hub::Start {
         addr: "127.0.0.1:0".parse().unwrap(),
@@ -193,6 +207,7 @@ async fn start_limited(
         watch,
         editor,
         ui: rules_hub::ui::UiFiles::none(),
+        project,
     })
     .await
     .expect("the hub starts");
@@ -229,7 +244,8 @@ async fn every_route_of_the_table_is_served_to_a_session_and_to_nobody_else() {
         }
         let with = hub.get(&route(name)).await;
         // Registered: a route that is not would be a 404 of the router with an empty body.
-        assert!(with.status == 200 || with.status == 400, "{name}: {with:?}");
+        // `waivers` without a project of the device is a 409 that says so.
+        assert!([200, 400, 409].contains(&with.status), "{name}: {with:?}");
         seen.insert(*name, with.status);
     }
     assert_eq!(seen.get("snapshot"), Some(&200));
@@ -238,6 +254,7 @@ async fn every_route_of_the_table_is_served_to_a_session_and_to_nobody_else() {
     assert_eq!(seen.get("sources"), Some(&200));
     assert_eq!(seen.get("about"), Some(&200));
     assert_eq!(seen.get("next_id"), Some(&200));
+    assert_eq!(seen.get("waivers"), Some(&409));
     // `search` without a query is a bad query, told by the route.
     assert_eq!(seen.get("search"), Some(&400));
 }
@@ -902,6 +919,7 @@ async fn the_page_of_a_folder_is_served_to_everybody_and_nothing_else_of_it() {
         watch: None,
         editor: None,
         ui: rules_hub::ui::UiFiles::load(&dir).unwrap(),
+        project: None,
     })
     .await
     .unwrap();
@@ -1272,9 +1290,6 @@ async fn what_is_not_a_request_or_not_served_is_refused_without_a_question_to_th
         ),
         ("no operation", r#"{"ops":[]}"#.to_owned()),
         ("an unknown operation", ops_body("explode", false)),
-        ("waive", ops_body("waive", false)),
-        ("renew", ops_body("renew", false)),
-        ("remove", ops_body("remove", false)),
         (
             "too many",
             json!({ "ops": vec![json!({ "op": "set" }); 101] }).to_string(),
@@ -1436,4 +1451,81 @@ async fn a_rule_set_is_named_as_the_snapshot_names_it_not_by_its_last_folder() {
     assert_eq!(hub.ops(&new("one/Checklists")).await.status, 200);
     assert_eq!(hub.ops(&new("Checklists")).await.status, 404);
     assert_eq!(hub.ops(&new("two/Checklists")).await.status, 404);
+}
+
+// ── the waivers of the project of this device ───────────────────────────────────
+
+async fn start_with_project(engine: &Arc<FakeEngine>, project: Option<&std::path::Path>) -> Hub {
+    start_all(
+        Some(Arc::clone(engine)),
+        Limits::default(),
+        // No class for any rule set: a waiver is the project's, not a rule set's.
+        Arc::default(),
+        None,
+        None,
+        project.map(std::path::Path::to_path_buf),
+    )
+    .await
+}
+
+fn waive_body() -> String {
+    json!({ "dry_run": true, "ops": [{ "op": "waive", "id": "DEP-01", "reason": "r" }] })
+        .to_string()
+}
+
+#[tokio::test]
+async fn the_waivers_are_those_of_the_project_of_the_device_and_without_one_the_hub_says_so() {
+    let engine = FakeEngine::new();
+    let none = start_with_project(&engine, None).await;
+    let r = none.get(&route("waivers")).await;
+    assert_eq!(r.status, 409, "{r:?}");
+    assert_eq!(r.json()["error"]["code"], "no_project");
+    assert_eq!(engine.count("waivers"), 0, "the engine is not asked");
+
+    let project = std::env::temp_dir();
+    let hub = start_with_project(&engine, Some(&project)).await;
+    let r = hub.get(&route("waivers")).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.body, WAIVERS.trim_end(), "passed on byte for byte");
+    assert_eq!(
+        engine.params_of("waivers"),
+        vec![Some(json!({ "project": project.to_string_lossy() }))]
+    );
+    // The page names no folder: a query is refused.
+    let named = hub
+        .get(&format!("{}?project=C:/elsewhere", route("waivers")))
+        .await;
+    assert_eq!(named.status, 400, "{named:?}");
+    assert_eq!(get(&hub.server, &route("waivers"), None).await.status, 401);
+}
+
+#[tokio::test]
+async fn a_waiver_operation_goes_with_the_project_of_the_device_and_never_with_one_of_the_page() {
+    let engine = FakeEngine::new();
+    let project = std::env::temp_dir();
+    let hub = start_with_project(&engine, Some(&project)).await;
+    // No class is needed for a waiver, and the project is put in by the hub.
+    let r = hub.ops(&waive_body()).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let sent = engine.params_of("ops").pop().flatten().unwrap();
+    assert_eq!(
+        sent["ops"][0]["project"],
+        project.to_string_lossy().as_ref()
+    );
+
+    // A project of the page is refused, whatever the operation, and the engine is not asked.
+    let before = engine.count("ops");
+    for op in ["waive", "renew", "remove", "set"] {
+        let body =
+            json!({ "ops": [{ "op": op, "id": "DEP-01", "project": "C:/elsewhere" }] }).to_string();
+        let r = hub.ops(&body).await;
+        assert_eq!(r.status, 400, "{op}: {r:?}");
+    }
+    assert_eq!(engine.count("ops"), before);
+
+    // Without a project of the device a waiver is a 409; a rule operation does not need one.
+    let bare = start_with_project(&engine, None).await;
+    let r = bare.ops(&waive_body()).await;
+    assert_eq!(r.status, 409, "{r:?}");
+    assert_eq!(r.json()["error"]["code"], "no_project");
 }

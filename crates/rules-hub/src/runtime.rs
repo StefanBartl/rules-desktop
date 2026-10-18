@@ -37,6 +37,8 @@ pub struct RulesRuntime {
     pub(crate) streams: Arc<StreamCounter>,
     /// Shows a rule file in an editor; none in a hub that cannot.
     pub(crate) editor: Option<Editor>,
+    /// The project of the waivers (`config.json`), put into every waiver operation by the hub.
+    pub(crate) project: Option<PathBuf>,
     /// The indexer and the refresher; they end with the runtime.
     jobs: Mutex<Vec<JoinHandle<()>>>,
     // Kept alive: the refresher ends when every sender of hints is gone.
@@ -161,6 +163,13 @@ struct RuleId {
 }
 
 impl RulesRuntime {
+    /// The project of the waivers.
+    #[must_use]
+    pub(crate) fn with_project(mut self, project: Option<PathBuf>) -> Self {
+        self.project = project;
+        self
+    }
+
     pub(crate) fn new(
         engine: Option<Arc<dyn Engine>>,
         status: HubStatus,
@@ -212,6 +221,7 @@ impl RulesRuntime {
             search,
             streams: Arc::default(),
             editor,
+            project: None,
             jobs: Mutex::new(jobs),
             _hints: hints,
             _watcher: watcher,

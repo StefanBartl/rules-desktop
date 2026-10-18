@@ -23,6 +23,7 @@ mod live;
 pub mod locate;
 mod routes;
 mod runtime;
+pub mod settings;
 pub mod sources;
 pub mod store;
 pub mod ui;
@@ -108,6 +109,9 @@ pub struct Start {
     pub watch: Option<Watch>,
     /// How a rule file is opened in an editor; `None`: the `open` route says it cannot.
     pub editor: Option<Editor>,
+    /// The project whose `.rules-waivers.json` the waivers are kept in (the person's word about this device);
+    /// `None`: the waiver routes say there is none. The page never names a folder.
+    pub project: Option<std::path::PathBuf>,
     /// The files of the page; [`ui::UiFiles::none`] serves the placeholder page of the core.
     pub ui: ui::UiFiles,
 }
@@ -133,7 +137,8 @@ pub async fn start(s: Start) -> std::io::Result<RunningServer> {
             // strictly, by the handler) and has the coarse limit of the writes.
             guard_rules: GuardRules::new(IDENTITY.route("hello"), [IDENTITY.route("ops")]),
             ui: Arc::new(s.ui),
-            runtime: RulesRuntime::new(s.engine, s.status, s.sources, max_age, s.watch, s.editor),
+            runtime: RulesRuntime::new(s.engine, s.status, s.sources, max_age, s.watch, s.editor)
+                .with_project(s.project),
             // There is one vault and no list to choose from, so this is never called.
             build: Arc::new(move |()| {
                 RulesRuntime::new(

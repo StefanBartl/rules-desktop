@@ -790,8 +790,109 @@ async fn a_rule_is_changed_and_changed_back_through_the_real_engine_and_only_its
     assert_eq!(undone["ok"], true, "{undone}");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
 
-    // The operations of the waivers are not served.
+    // A waiver needs the project of the device; there is none in this config, so the hub says so.
     let waive = serde_json::json!({ "ops": [{ "op": "waive", "id": "WW-01", "reason": "x" }] });
-    assert_eq!(post_ops(&hub, &token, &waive).await.0, 400);
+    assert_eq!(post_ops(&hub, &token, &waive).await.0, 409);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn waivers_are_made_renewed_and_removed_through_the_real_engine_in_the_project_of_the_device()
+{
+    let base = std::env::temp_dir().join(format!("rules-desktop-waivers-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let set = base.join("set");
+    write_rule_file(&set, "WW-01", "recommended", "first");
+    let project = base.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let vault = base.join("vault");
+    std::fs::create_dir_all(&vault).unwrap();
+    std::fs::write(
+        vault.join(".rules.json"),
+        serde_json::json!({ "rulesets": [set] }).to_string(),
+    )
+    .unwrap();
+    let dir = config_dir(
+        "waivers",
+        Some(r#"{"schema":1,"default":"internal","sources":{}}"#),
+    );
+    // The project is the person's word about this device, in config.json: the page names no folder.
+    std::fs::write(
+        dir.join("config.json"),
+        serde_json::json!({ "vault": vault, "project": project }).to_string(),
+    )
+    .unwrap();
+    let file = project.join(".rules-waivers.json");
+    let hub = serve_in(dir);
+    let token = token(&hub).await;
+
+    let none = get(&hub, &token, "/api/rules/waivers").await;
+    assert_eq!(none.0, 200, "{}", none.1);
+    assert_eq!(none.1["exists"], false);
+    assert_eq!(none.1["items"].as_array().map(Vec::len), Some(0));
+    let empty_etag = none.1["etag"].as_str().unwrap().to_owned();
+
+    // A dry run says what would be written and writes nothing.
+    let waive = |dry_run: bool, if_match: &str| {
+        serde_json::json!({
+            "schema": 1, "client_op_id": "v-1", "dry_run": dry_run,
+            "ops": [{ "op": "waive", "id": "WW-01", "reason": "legacy", "expires": "2099-12-31", "if_match": if_match }],
+        })
+    };
+    let (status, dry) = post_ops(&hub, &token, &waive(true, &empty_etag)).await;
+    assert_eq!((status, dry["ok"].as_bool()), (200, Some(true)), "{dry}");
+    assert!(!file.exists());
+
+    // The waiver: the file of the project is written, canonically, and the page reads it back.
+    let (status, done) = post_ops(&hub, &token, &waive(false, &empty_etag)).await;
+    assert_eq!((status, done["ok"].as_bool()), (200, Some(true)), "{done}");
+    let written = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(
+        written,
+        "{\n  \"WW-01\": {\n    \"expires\": \"2099-12-31\",\n    \"reason\": \"legacy\"\n  }\n}\n"
+    );
+    let read = get(&hub, &token, "/api/rules/waivers").await.1;
+    assert_eq!(read["items"][0]["id"], "WW-01");
+    assert_eq!(read["items"][0]["expired"], false);
+    assert_eq!(read["items"][0]["known"], true);
+    let etag = read["etag"].as_str().unwrap().to_owned();
+
+    // Renew without an end: the form is the short one; a stale tag is a conflict and writes nothing.
+    let renew = |if_match: &str| serde_json::json!({ "ops": [{ "op": "renew", "id": "WW-01", "no_expiry": true, "if_match": if_match }] });
+    let (_, stale) = post_ops(&hub, &token, &renew("sha256:0000000000000000")).await;
+    assert_eq!(stale["results"][0]["error"]["code"], "conflict", "{stale}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), written);
+    let (_, renewed) = post_ops(&hub, &token, &renew(&etag)).await;
+    assert_eq!(renewed["ok"], true, "{renewed}");
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "{\n  \"WW-01\": \"legacy\"\n}\n"
+    );
+
+    // The engine's way back puts the end date back, byte for byte.
+    let inverse = renewed["results"][0]["inverse"].clone();
+    let (_, undone) = post_ops(&hub, &token, &serde_json::json!({ "ops": [inverse] })).await;
+    assert_eq!(undone["ok"], true, "{undone}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), written);
+
+    // Remove: the file keeps an empty object.
+    let etag = get(&hub, &token, "/api/rules/waivers").await.1["etag"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let remove =
+        serde_json::json!({ "ops": [{ "op": "remove", "id": "WW-01", "if_match": etag }] });
+    let (_, removed) = post_ops(&hub, &token, &remove).await;
+    assert_eq!(removed["ok"], true, "{removed}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{}\n");
+
+    // The page cannot point the write at another folder: a project of its own is refused and nothing is written.
+    let elsewhere = base.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let hijack = serde_json::json!({ "ops": [
+        { "op": "waive", "id": "WW-01", "reason": "x", "project": elsewhere }
+    ] });
+    assert_eq!(post_ops(&hub, &token, &hijack).await.0, 400);
+    assert!(!elsewhere.join(".rules-waivers.json").exists());
     let _ = std::fs::remove_dir_all(&base);
 }

@@ -6,9 +6,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::settings::RulesSettings;
 use appkit_core::authn::{Secret, SystemClock, CODE_BYTES, TOKEN_BYTES};
 use appkit_core::registry::{self, HubRecord};
-use appkit_hub::config::{FileConfig, NoSettings};
+use appkit_hub::config::FileConfig;
 use appkit_hub::discovery::AppInputs;
 use appkit_hub::env::Env;
 use appkit_hub::{HubStatus, Limits};
@@ -37,7 +38,7 @@ fn app_dir(env: &Env) -> Result<PathBuf, String> {
 /// The port to try first: the option, the environment, the settings file, then the default.
 fn wanted_port(
     opts: &ServeOptions,
-    file: &FileConfig<NoSettings>,
+    file: &FileConfig<RulesSettings>,
     env: &Env,
 ) -> Result<u16, String> {
     if let Some(p) = opts.port {
@@ -100,7 +101,7 @@ pub struct EngineState {
 }
 
 /// Find Neovim, the engine and the vault, start the engine and ask it `hello`.
-pub async fn engine_state(file: &FileConfig<NoSettings>, env: &Env) -> EngineState {
+pub async fn engine_state(file: &FileConfig<RulesSettings>, env: &Env) -> EngineState {
     let failed = |code: &'static str, note: String| EngineState {
         status: HubStatus {
             engine_ready: false,
@@ -157,11 +158,26 @@ pub async fn engine_state(file: &FileConfig<NoSettings>, env: &Env) -> EngineSta
 ///
 /// # Errors
 ///
+/// The project of the waivers: `RULES_DESKTOP_PROJECT`, else `project` of `config.json`. One that cannot be used stops the
+/// start (a typo must not turn into waivers written somewhere else).
+fn project_of(
+    file: &FileConfig<RulesSettings>,
+    env: &Env,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let project = env
+        .path(&crate::IDENTITY.var("PROJECT"))
+        .or_else(|| file.app.project.clone());
+    if let Some(path) = &project {
+        crate::settings::check_project(path).map_err(|why| format!("project: {why}"))?;
+    }
+    Ok(project)
+}
+
 /// A text for the person at the terminal: what is missing or in the way.
 pub async fn serve(opts: ServeOptions) -> Result<(), String> {
     let env = Env::from_process();
     let dir = app_dir(&env)?;
-    let file: FileConfig<NoSettings> =
+    let file: FileConfig<RulesSettings> =
         appkit_hub::config::load_file(&dir).map_err(|e| e.to_string())?;
     let want = wanted_port(&opts, &file, &env)?;
 
@@ -196,6 +212,7 @@ pub async fn serve(opts: ServeOptions) -> Result<(), String> {
         None => UiFiles::embedded(),
     };
 
+    let project = project_of(&file, &env)?;
     let state = engine_state(&file.effective(), &env).await;
     if let Some(note) = &state.note {
         eprintln!("{note}");
@@ -226,6 +243,7 @@ pub async fn serve(opts: ServeOptions) -> Result<(), String> {
                 opener: Arc::new(TerminalOpener::new(nvim, env.clone())),
             }),
         ui: ui.clone(),
+        project: project.clone(),
         watch: state.vault.clone().map(|vault| Watch {
             vault,
             refresh: RefreshOptions::default(),
@@ -416,7 +434,7 @@ mod tests {
 
     #[test]
     fn the_port_comes_from_the_option_then_the_environment_then_the_file() {
-        let file = FileConfig::<NoSettings> {
+        let file = FileConfig::<RulesSettings> {
             port: Some(20000),
             ..FileConfig::default()
         };

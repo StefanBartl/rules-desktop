@@ -36,6 +36,7 @@ impl Subject for Rules {
             watch: None,
             editor: None,
             ui: rules_hub::ui::UiFiles::none(),
+            project: None,
         }))
     }
 
