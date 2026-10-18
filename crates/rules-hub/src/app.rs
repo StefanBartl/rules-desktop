@@ -154,10 +154,6 @@ pub async fn engine_state(file: &FileConfig<RulesSettings>, env: &Env) -> Engine
     }
 }
 
-/// Run the server until Ctrl-C.
-///
-/// # Errors
-///
 /// The project of the waivers: `RULES_DESKTOP_PROJECT`, else `project` of `config.json`. One that cannot be used stops the
 /// start (a typo must not turn into waivers written somewhere else).
 fn project_of(
@@ -173,6 +169,10 @@ fn project_of(
     Ok(project)
 }
 
+/// Run the server until Ctrl-C.
+///
+/// # Errors
+///
 /// A text for the person at the terminal: what is missing or in the way.
 pub async fn serve(opts: ServeOptions) -> Result<(), String> {
     let env = Env::from_process();

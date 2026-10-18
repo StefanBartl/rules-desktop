@@ -416,8 +416,16 @@ impl SourcePolicy {
         Self::parse(&text, target.clone())
             .map_err(|_| "the policy does not read back".to_owned())?;
         let temp = target.with_extension("json.tmp");
-        std::fs::write(&temp, text.as_bytes())
-            .map_err(|_| "the file could not be written".to_owned())?;
+        // Synced before the rename: a crash must leave the old file or the whole new one, never an empty one (an
+        // unreadable `sources.json` stops the start).
+        let written = std::fs::File::create(&temp).and_then(|mut file| {
+            std::io::Write::write_all(&mut file, text.as_bytes())?;
+            file.sync_all()
+        });
+        if written.is_err() {
+            let _ = std::fs::remove_file(&temp);
+            return Err("the file could not be written".to_owned());
+        }
         std::fs::rename(&temp, &target).map_err(|_| {
             let _ = std::fs::remove_file(&temp);
             "the file could not be replaced".to_owned()

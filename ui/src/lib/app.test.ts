@@ -800,7 +800,7 @@ describe('the data classes', () => {
   it('sends the change, reads the classes again and says it is saved', async () => {
     const s = await ready();
     const reads = s.fake.count('/api/rules/sources');
-    await s.app.setClass({ key: 'checklists', class: 'private' });
+    expect(await s.app.setClass({ key: 'checklists', class: 'private' })).toBe(true);
     expect(s.fake.classRequests).toEqual([{ key: 'checklists', class: 'private' }]);
     expect(s.fake.count('/api/rules/sources')).toBe(reads + 1);
     expect(s.app.notice).toEqual({ key: 'classes.saved' });
@@ -811,7 +811,7 @@ describe('the data classes', () => {
     const s = await ready();
     s.fake.classAnswer = needsWord;
     const reads = s.fake.count('/api/rules/sources');
-    await s.app.setClass(loosen);
+    expect(await s.app.setClass(loosen)).toBe(false);
     expect(s.app.classConfirm).toEqual(loosen);
     expect(s.fake.count('/api/rules/sources')).toBe(reads);
     expect(s.app.notice).not.toEqual({ key: 'classes.saved' });
@@ -821,7 +821,7 @@ describe('the data classes', () => {
     const s = await ready();
     s.fake.classAnswer = needsWord;
     await s.app.setClass(loosen);
-    await s.app.confirmClass();
+    expect(await s.app.confirmClass()).toBe(true);
     expect(s.fake.classRequests).toEqual([loosen, { ...loosen, confirm_loosen: true }]);
     expect(s.app.classConfirm).toBeNull();
     expect(s.app.notice).toEqual({ key: 'classes.saved' });
@@ -840,7 +840,7 @@ describe('the data classes', () => {
   it('says it failed on any other refusal and keeps no question open', async () => {
     const s = await ready();
     s.fake.classAnswer = () => ({ status: 400, body: { error: { code: 'bad_request', message: 'no' } } });
-    await s.app.setClass(loosen);
+    expect(await s.app.setClass(loosen)).toBe(false);
     expect(s.app.notice).toEqual({ key: 'classes.failed' });
     expect(s.app.classConfirm).toBeNull();
   });

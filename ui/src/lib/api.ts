@@ -48,7 +48,6 @@ export interface HubSources {
   private: string[];
 }
 
-/** A piece of a rule's text around a match; `marks` are `[start, end)` in UTF-16 units of `text`. */
 /** A change of a data class: one target (a key, or the default) and the class; `class` null takes it away. */
 export type ClassChange = (
   | { key: string }
@@ -58,6 +57,7 @@ export type ClassChange = (
   confirm_loosen?: boolean;
 };
 
+/** A piece of a rule's text around a match; `marks` are `[start, end)` in UTF-16 units of `text`. */
 export interface SearchSnippet {
   text: string;
   marks: [number, number][];

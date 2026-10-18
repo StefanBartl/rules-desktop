@@ -738,36 +738,33 @@ export class App {
   /** A change of a class that releases more than before: the hub wants the word of the person; shown until chosen. */
   classConfirm = $state.raw<ClassChange | null>(null);
 
-  /** Read the classes of the files again (after a change of them). */
-  async reloadSources(): Promise<void> {
-    await this.readSources();
-  }
-
   /**
    * Change a data class. The hub says whether the change releases more than before (it knows the policy in force): then
-   * the person is asked and the change goes again with their word.
+   * the person is asked and the change goes again with their word. Returns whether the change was written: a view that
+   * shows the choice of the person (a select) puts it back to what is in force when it was not.
    */
-  async setClass(change: ClassChange): Promise<void> {
+  async setClass(change: ClassChange): Promise<boolean> {
     this.classConfirm = null;
     try {
       await this.env.hub.setClass(change);
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) return;
+      if (error instanceof ApiError && error.status === 401) return false;
       if (error instanceof ApiError && error.code === 'confirm_needed') {
         this.classConfirm = change;
-        return;
+        return false;
       }
       this.notice = { key: 'classes.failed' };
-      return;
+      return false;
     }
     await this.readSources();
     this.notice = { key: 'classes.saved' };
+    return true;
   }
 
   /** The person said yes to a change that releases more. */
-  async confirmClass(): Promise<void> {
+  async confirmClass(): Promise<boolean> {
     const change = this.classConfirm;
-    if (change) await this.setClass({ ...change, confirm_loosen: true });
+    return change ? this.setClass({ ...change, confirm_loosen: true }) : false;
   }
 
   cancelClass(): void {

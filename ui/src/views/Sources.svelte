@@ -13,6 +13,7 @@
   const t = (key: Key, params: Record<string, string | number> = {}) => translate(app.lang, key, params);
 
   type Class = Exclude<DataClass, 'unclassified'>;
+  type ClassChangeTarget = { key: string } | { default: true };
   const CLASSES: readonly Class[] = ['public', 'internal', 'private'];
   const doc = $derived(app.sources);
   let newKey = $state('');
@@ -21,20 +22,24 @@
   /** The first part of the sources of the files: a start for a key. */
   const startsOf = $derived([...new Set((doc?.files ?? []).map((f) => f.path.split('/')[0] ?? ''))].filter((s) => s !== ''));
 
-  function pick(event: Event & { currentTarget: HTMLSelectElement }): Class | null {
-    const value = event.currentTarget.value;
-    return value === '' ? null : (value as Class);
+  /** What a select says: a class, or none. */
+  function pick(select: HTMLSelectElement): Class | null {
+    return select.value === '' ? null : (select.value as Class);
   }
 
-  async function setKey(key: string, change: Class | null): Promise<void> {
-    await app.setClass({ key, class: change });
+  /**
+   * A select shows the class in force. When a change was not written (the person is asked first, or it failed) the
+   * select goes back to it, so that it never shows a class that does not hold.
+   */
+  async function change(select: HTMLSelectElement, target: ClassChangeTarget, inForce: string): Promise<void> {
+    const written = await app.setClass({ ...target, class: pick(select) });
+    if (!written) select.value = inForce;
   }
 
   async function add(): Promise<void> {
     const key = newKey.trim();
     if (key === '') return;
-    await app.setClass({ key, class: newClass });
-    if (app.classConfirm === null) newKey = '';
+    if (await app.setClass({ key, class: newClass })) newKey = '';
   }
 
   function describe(change: ClassChange | null): string {
@@ -74,12 +79,12 @@
           <tr>
             <th scope="row"><code>{shownText(entry.key)}</code></th>
             <td>
-              <select aria-label={`${entry.key}: ${t('classes.class')}`} value={entry.class} onchange={(e) => void setKey(entry.key, pick(e))}>
+              <select aria-label={`${entry.key}: ${t('classes.class')}`} value={entry.class} onchange={(e) => void change(e.currentTarget, { key: entry.key }, entry.class)}>
                 {#each CLASSES as value (value)}<option {value}>{t(classLabel(value))}</option>{/each}
               </select>
             </td>
             <td>{entry.files}</td>
-            <td><button type="button" onclick={() => void setKey(entry.key, null)}>{t('classes.remove')}</button></td>
+            <td><button type="button" onclick={() => void app.setClass({ key: entry.key, class: null })}>{t('classes.remove')}</button></td>
           </tr>
         {/each}
         <tr>
@@ -88,7 +93,7 @@
             <select
               aria-label={`${t('classes.default')}: ${t('classes.class')}`}
               value={doc.default ?? ''}
-              onchange={(e) => void app.setClass({ default: true, class: pick(e) })}
+              onchange={(e) => void change(e.currentTarget, { default: true }, doc.default ?? '')}
             >
               <option value="">{t('classes.none')}</option>
               {#each CLASSES as value (value)}<option {value}>{t(classLabel(value))}</option>{/each}

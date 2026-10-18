@@ -48,13 +48,18 @@ pub fn apply(old: &SourcePolicy, change: &Change) -> Result<SourcePolicy, String
     }
 }
 
-/// Does the change release more than the policy in force did?
+/// Does the change release more than the policy in force did? The strictest key wins, so a change of one key can
+/// decide the class of files that a deeper key or another name of the same rule set holds back: every key of both
+/// policies and every file of the held snapshot (`files`, when the hub holds one) is asked, not only the key named.
 #[must_use]
-pub fn is_loosening(old: &SourcePolicy, new: &SourcePolicy, change: &Change) -> bool {
-    match &change.key {
-        Some(key) => loosens(old, new, key),
-        None => loosens_default(old, new),
-    }
+pub fn is_loosening(old: &SourcePolicy, new: &SourcePolicy, files: &[String]) -> bool {
+    loosens_default(old, new)
+        || old
+            .keys()
+            .chain(new.keys())
+            .map(|(key, _)| key)
+            .chain(files.iter().map(String::as_str))
+            .any(|source| loosens(old, new, source))
 }
 
 pub(crate) async fn set_class(State(st): State<Arc<Shared>>, body: Bytes) -> Response {
@@ -79,6 +84,19 @@ pub(crate) async fn set_class(State(st): State<Arc<Shared>>, body: Bytes) -> Res
             "this hub keeps no sources.json",
         );
     };
+    // The files of the held snapshot, for the question whether a change releases more (best effort: without an engine
+    // the keys alone are asked). Read before the lock: it is not held across an await.
+    let files: Vec<String> = match rt.store.current().await {
+        Ok(cached) if rt.store.has_engine() => rt
+            .held(&cached)
+            .and_then(|held| {
+                held.files
+                    .as_ref()
+                    .map(|files| files.iter().map(|f| f.path.clone()).collect())
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
     // One change at a time: read the policy in force, change it, write it, put it in force.
     let _one = rt
         .policy_edit
@@ -89,7 +107,7 @@ pub(crate) async fn set_class(State(st): State<Arc<Shared>>, body: Bytes) -> Res
         Ok(p) => p,
         Err(why) => return error_body(StatusCode::BAD_REQUEST, "bad_request", &why),
     };
-    if is_loosening(&old, &new, &change) && !change.confirm_loosen {
+    if is_loosening(&old, &new, &files) && !change.confirm_loosen {
         return error_body(
             StatusCode::CONFLICT,
             "confirm_needed",
@@ -187,8 +205,7 @@ mod tests {
             &[("a", Class::Internal), ("p", Class::Private)],
             Some(Class::Internal),
         );
-        let loosening =
-            |change: Change| is_loosening(&old, &apply(&old, &change).unwrap(), &change);
+        let loosening = |change: Change| is_loosening(&old, &apply(&old, &change).unwrap(), &[]);
         // More open than before.
         assert!(loosening(key("a", Some(Class::Public))));
         assert!(loosening(key("p", Some(Class::Internal))));
@@ -204,11 +221,7 @@ mod tests {
         // A new key under a default that releases nothing is a loosening of that file.
         let closed = policy(&[], None);
         let open = key("n", Some(Class::Public));
-        assert!(is_loosening(
-            &closed,
-            &apply(&closed, &open).unwrap(),
-            &open
-        ));
+        assert!(is_loosening(&closed, &apply(&closed, &open).unwrap(), &[]));
         // The default: from none to a class releases what no key named.
         let to_internal = Change {
             key: None,
@@ -219,7 +232,7 @@ mod tests {
         assert!(is_loosening(
             &closed,
             &apply(&closed, &to_internal).unwrap(),
-            &to_internal
+            &[]
         ));
         let to_none = Change {
             key: None,
@@ -227,11 +240,25 @@ mod tests {
             class: None,
             confirm_loosen: false,
         };
-        assert!(!is_loosening(
-            &old,
-            &apply(&old, &to_none).unwrap(),
-            &to_none
-        ));
+        assert!(!is_loosening(&old, &apply(&old, &to_none).unwrap(), &[]));
+    }
+
+    #[test]
+    fn a_change_of_one_key_that_frees_files_a_deeper_key_held_back_is_a_loosening() {
+        // lua/x is public but lua is private: the strictest wins, so lua/x/** is private. Without lua it is public.
+        let old = policy(&[("lua", Class::Private), ("lua/x", Class::Public)], None);
+        for change in [key("lua", None), key("lua", Some(Class::Public))] {
+            let new = apply(&old, &change).unwrap();
+            assert!(is_loosening(&old, &new, &[]), "{change:?}");
+        }
+        // The other name of the same rule set: Checklists holds back wkdbook-Lua/Checklists/...
+        let aliased = policy(&[("Checklists", Class::Private)], Some(Class::Public));
+        let gone = apply(&aliased, &key("Checklists", None)).unwrap();
+        let files = ["wkdbook-Lua/Checklists/a.md".to_owned()];
+        assert!(is_loosening(&aliased, &gone, &files));
+        // A change that holds back more is still none.
+        let tighter = apply(&old, &key("lua/x", Some(Class::Private))).unwrap();
+        assert!(!is_loosening(&old, &tighter, &files));
     }
 
     #[test]

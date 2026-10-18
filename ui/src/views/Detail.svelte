@@ -79,9 +79,10 @@
       <p class="note">{t('edit.no_class')}</p>
     {:else}
       <button type="button" onclick={() => (editing = true)}>{t('edit.open')}</button>
-      <button type="button" onclick={() => app.startWaiver(rule.id)}>{t('waiver.start')}</button>
       {#if !rule.editable}<p class="note">{t('detail.not_editable')}</p>{/if}
     {/if}
+    <!-- A waiver is written into the project, not into the rule set: it needs no class and no file of its own. -->
+    {#if !editing}<p><button type="button" onclick={() => app.startWaiver(rule.id)}>{t('waiver.start')}</button></p>{/if}
     {#if holdsHidden(rule.text) || holdsHidden(rule.title)}<p class="note">{t('detail.hidden')}</p>{/if}
 
     <h3>{t('detail.text')}</h3>

@@ -532,8 +532,16 @@ test('a class is set, a change that releases more is asked first, and only sourc
   await page.keyboard.press('s');
   await expect(page.getByRole('table', { name: 'Classes' })).toBeVisible();
 
+  // A key the hub refuses is not written, and what the person typed stays.
+  const keyInput = page.getByLabel('Rule set (name as it starts the source, e.g. gamma)', { exact: true });
+  await keyInput.fill('bad key');
+  await page.getByRole('button', { name: 'Set a class', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'could not be saved' })).toBeVisible();
+  await expect(keyInput).toHaveValue('bad key');
+  expect(keys()['bad key']).toBeUndefined();
+
   // Adding a key that holds something back needs no question.
-  await page.getByLabel('Rule set (name as it starts the source, e.g. gamma)', { exact: true }).fill('delta');
+  await keyInput.fill('delta');
   await page.locator('form.add select').selectOption('private');
   await page.getByRole('button', { name: 'Set a class', exact: true }).click();
   await expect(page.getByRole('row', { name: /^delta / })).toBeVisible();
@@ -549,6 +557,8 @@ test('a class is set, a change that releases more is asked first, and only sourc
   await ask.getByRole('button', { name: 'No', exact: true }).click();
   await expect(ask).toHaveCount(0);
   expect(keys()['delta']).toEqual({ class: 'private' });
+  // The select shows what is in force, not the choice that was not written.
+  await expect(select).toHaveValue('private');
 
   // "Yes" sends it again with the word of the person.
   await select.selectOption('public');
@@ -560,8 +570,8 @@ test('a class is set, a change that releases more is asked first, and only sourc
   await page.getByRole('row', { name: /^delta / }).getByRole('button', { name: 'Take away' }).click();
   if (await ask.isVisible()) await ask.getByRole('button', { name: 'Yes, release more', exact: true }).click();
   await expect.poll(() => keys()['delta']).toBeUndefined();
-  // The hub answers 409 to a change that releases more (that is what makes the page ask), and Chrome reports it as a
+  // The hub answers 409 to a change that releases more (that is what makes the page ask) and 400 to a bad key, and Chrome reports them as a
   // finding of the console: those are expected here, nothing else is.
   const seen = consoleProblems.get(page) ?? [];
-  seen.splice(0, seen.length, ...seen.filter((m) => !m.includes('409')));
+  seen.splice(0, seen.length, ...seen.filter((m) => !m.includes('409') && !m.includes('400')));
 });
