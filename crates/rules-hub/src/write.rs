@@ -15,9 +15,11 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use serde_json::{json, Value};
 
-use crate::answer::{ask, engine_unavailable};
+use crate::answer::{ask, engine_failure, engine_unavailable};
 use crate::engine::Calls;
-use crate::routes::Shared;
+use crate::routes::{no_snapshot, Shared};
+use crate::runtime::Held;
+use crate::sources::{Shown, SourcePolicy};
 
 /// The fields of a request of `ops` (the engine checks the rest, strictly).
 pub const OPS_FIELDS: [&str; 4] = ["schema", "client_op_id", "dry_run", "ops"];
@@ -76,6 +78,95 @@ pub fn check_ops_request(body: &[u8]) -> Result<Value, String> {
     Ok(value)
 }
 
+/// Why a request is not passed on although its form is right.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Refusal {
+    pub(crate) status: StatusCode,
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
+}
+
+impl Refusal {
+    fn bad(message: String) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request",
+            message,
+        }
+    }
+}
+
+/// May the page write what the request asks for? A rule set that has no class on this device is
+/// shown and never written (fail closed, like everything that leaves the hub): `sources.json` is where
+/// the person says what a rule set is. The class is worked out from the `source` the held snapshot
+/// gives the rule (`<rule set name>/<path>`), the same way `sources` classifies a file; for a new rule
+/// from the rule set it is made in. An id the snapshot does not hold is a 404, not a guess. The whole
+/// request is answered, never a part of it (like the engine, which checks the whole request first).
+///
+/// # Errors
+///
+/// The first operation that may not be written, with the reason and without a path.
+pub(crate) fn authorize(
+    policy: &SourcePolicy,
+    held: &Held,
+    request: &Value,
+) -> Result<(), Refusal> {
+    let ops = request
+        .get("ops")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    for (i, op) in ops.iter().enumerate() {
+        let n = i + 1;
+        let text = |key: &str| op.get(key).and_then(Value::as_str);
+        let name = text("op").unwrap_or_default();
+        let source = if name == "new" {
+            let ruleset = match op.get("ruleset") {
+                None | Some(Value::Null) => held.first_ruleset.as_deref(),
+                Some(Value::String(name)) => Some(name.as_str()),
+                Some(_) => return Err(Refusal::bad(format!("ops[{n}]: ruleset must be a name"))),
+            };
+            let Some(family) = text("family") else {
+                return Err(Refusal::bad(format!("ops[{n}]: new needs a family")));
+            };
+            let Some(ruleset) = ruleset else {
+                return Err(not_written(n));
+            };
+            format!("{ruleset}/_rules/{family}/{family}-new.md")
+        } else {
+            let Some(id) = text("id") else {
+                return Err(Refusal::bad(format!("ops[{n}]: {name} needs an id")));
+            };
+            let known = if name == "reinstate" {
+                &held.retired
+            } else {
+                &held.places
+            };
+            let Some(place) = known.get(id) else {
+                return Err(Refusal {
+                    status: StatusCode::NOT_FOUND,
+                    code: "not_found",
+                    message: format!("ops[{n}]: no such rule is held"),
+                });
+            };
+            place.clone()
+        };
+        if policy.shown(&source) == Shown::Unclassified {
+            return Err(not_written(n));
+        }
+    }
+    Ok(())
+}
+
+fn not_written(n: usize) -> Refusal {
+    Refusal {
+        status: StatusCode::FORBIDDEN,
+        code: "write_refused",
+        message: format!(
+            "ops[{n}]: this rule set has no class on this device, so it is shown and not written (see sources.json)"
+        ),
+    }
+}
+
 /// Did the answer of `ops` say that something changed? A document this hub cannot read for it counts
 /// as a change: it scans anyway.
 fn changed(document: &str) -> bool {
@@ -115,6 +206,17 @@ pub(crate) async fn ops(State(st): State<Arc<Shared>>, body: Bytes) -> Response 
     let rt = st.rt();
     if !rt.store.has_engine() {
         return engine_unavailable(&rt);
+    }
+    // What may be written is decided against the snapshot the hub holds, before the engine is asked.
+    let cached = match rt.store.current().await {
+        Ok(c) => c,
+        Err(error) => return engine_failure(error),
+    };
+    let Some(held) = rt.held(&cached) else {
+        return no_snapshot();
+    };
+    if let Err(refusal) = authorize(&rt.sources, &held, &request) {
+        return error_body(refusal.status, refusal.code, &refusal.message);
     }
     let reply = match ask(&rt, Calls::Ops, Some(&request)).await {
         Ok(reply) => reply,

@@ -1158,6 +1158,15 @@ async fn a_hub_without_an_editor_says_so_and_a_session_is_needed() {
 
 // ── the write side: `next_id` and `ops` ─────────────────────────────────────────────────────────
 
+/// Everything has a class on this device: what a write needs.
+fn internal() -> Arc<SourcePolicy> {
+    Arc::new(SourcePolicy::default().with_default(Some(Class::Internal)))
+}
+
+async fn start_writable(engine: &Arc<FakeEngine>) -> Hub {
+    start_classified(Some(Arc::clone(engine)), None, internal(), None).await
+}
+
 /// A write the engine did: one rule changed.
 const WROTE: &str = r#"{"kind":"rules.result","ok":true,"dry_run":false,"results":[{"ok":true,"op":"set","id":"DEP-01","changed_ids":["DEP-01"]}]}"#;
 /// A write that changed nothing (a failed operation, a rule that was already so).
@@ -1182,7 +1191,7 @@ impl Hub {
 #[tokio::test]
 async fn next_id_asks_for_one_family_or_for_all_and_passes_the_answer_on() {
     let engine = FakeEngine::new();
-    let hub = start(&engine).await;
+    let hub = start_writable(&engine).await;
     let all = hub.get(&route("next_id")).await;
     assert_eq!(all.status, 200, "{all:?}");
     assert_eq!(all.body, NEXT_ID.trim_end(), "passed on byte for byte");
@@ -1210,7 +1219,7 @@ async fn next_id_asks_for_one_family_or_for_all_and_passes_the_answer_on() {
 #[tokio::test]
 async fn a_dry_run_is_passed_on_as_it_is_and_reads_nothing_again() {
     let engine = FakeEngine::new();
-    let hub = start(&engine).await;
+    let hub = start_writable(&engine).await;
     hub.get(&route("snapshot")).await;
     let body = ops_body("set", true);
     let r = hub.ops(&body).await;
@@ -1230,7 +1239,7 @@ async fn a_dry_run_is_passed_on_as_it_is_and_reads_nothing_again() {
 #[tokio::test]
 async fn a_write_that_changed_something_is_followed_by_a_read_before_the_answer() {
     let engine = FakeEngine::new();
-    let hub = start(&engine).await;
+    let hub = start_writable(&engine).await;
     hub.get(&route("snapshot")).await;
     assert_eq!(engine.count("snapshot"), 1);
     *engine.ops.lock().unwrap() = WROTE.to_owned();
@@ -1253,7 +1262,7 @@ async fn a_write_that_changed_something_is_followed_by_a_read_before_the_answer(
 #[tokio::test]
 async fn what_is_not_a_request_or_not_served_is_refused_without_a_question_to_the_engine() {
     let engine = FakeEngine::new();
-    let hub = start(&engine).await;
+    let hub = start_writable(&engine).await;
     for (name, body) in [
         ("not JSON", "nope".to_owned()),
         ("not an object", "[]".to_owned()),
@@ -1290,14 +1299,7 @@ async fn writes_are_counted_and_dry_runs_are_not() {
         post_max: 6,
         ..Limits::default()
     };
-    let hub = start_limited(
-        Some(Arc::clone(&engine)),
-        limits,
-        Arc::default(),
-        None,
-        None,
-    )
-    .await;
+    let hub = start_limited(Some(Arc::clone(&engine)), limits, internal(), None, None).await;
     // The pairing that made the session was a mutation too: the limit is reached after a few writes.
     let mut done = 0;
     loop {
@@ -1318,8 +1320,94 @@ async fn writes_are_counted_and_dry_runs_are_not() {
 
 #[tokio::test]
 async fn without_an_engine_a_write_says_so() {
-    let hub = start_with(None, None).await;
+    let hub = start_classified(None, None, internal(), None).await;
     let r = hub.ops(&ops_body("set", false)).await;
     assert_eq!(r.status, 503, "{r:?}");
     assert_eq!(r.json()["error"]["code"], "engine_unavailable");
+}
+
+#[tokio::test]
+async fn a_rule_set_without_a_class_is_shown_and_never_written() {
+    // No sources.json: every rule set is unclassified.
+    let engine = FakeEngine::new();
+    let hub = start(&engine).await;
+    for dry_run in [true, false] {
+        let r = hub.ops(&ops_body("set", dry_run)).await;
+        assert_eq!(r.status, 403, "{r:?}");
+        assert_eq!(r.json()["error"]["code"], "write_refused");
+        assert!(!r.body.contains("DEP.md"), "no path in the refusal: {r:?}");
+    }
+    assert_eq!(engine.count("ops"), 0, "the engine is not asked");
+    // It is still read.
+    assert_eq!(hub.get(&route("snapshot")).await.status, 200);
+}
+
+#[tokio::test]
+async fn the_class_decides_per_operation_and_the_whole_request_is_refused_for_one() {
+    let engine = FakeEngine::new();
+    // Checklists is public, but the file of ERR-100 lies under a key that says nothing, and the default is none.
+    let policy =
+        Arc::new(SourcePolicy::new([("Checklists/DEP.md".to_owned(), Class::Private)]).unwrap());
+    let hub = start_classified(Some(Arc::clone(&engine)), None, policy, None).await;
+    // DEP-01 lives in Checklists/DEP.md (private: written, the owner said it), ERR-100 in a file no key names.
+    let body = json!({ "ops": [
+        { "op": "set", "id": "DEP-01", "patch": { "severity": "critical" } },
+        { "op": "set", "id": "ERR-100", "patch": { "severity": "critical" } },
+    ]})
+    .to_string();
+    let r = hub.ops(&body).await;
+    assert_eq!(r.status, 403, "{r:?}");
+    assert!(r.json()["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("ops[2]"));
+    assert_eq!(engine.count("ops"), 0, "nothing of the request ran");
+    let only_first =
+        json!({ "ops": [{ "op": "set", "id": "DEP-01", "patch": { "severity": "critical" } }] })
+            .to_string();
+    assert_eq!(hub.ops(&only_first).await.status, 200);
+}
+
+#[tokio::test]
+async fn an_id_the_snapshot_does_not_hold_is_a_404_and_new_is_judged_by_its_rule_set() {
+    let engine = FakeEngine::new();
+    let hub = start_writable(&engine).await;
+    for (name, body) in [
+        (
+            "an unknown id",
+            json!({ "ops": [{ "op": "set", "id": "NOPE-01", "patch": {} }] }),
+        ),
+        // Nothing is retired in the golden snapshot, and a rule that is live cannot be reinstated.
+        (
+            "reinstate of a live rule",
+            json!({ "ops": [{ "op": "reinstate", "id": "DEP-01" }] }),
+        ),
+    ] {
+        let r = hub.ops(&body.to_string()).await;
+        assert_eq!(r.status, 404, "{name}: {r:?}");
+    }
+    let id_missing = json!({ "ops": [{ "op": "set", "patch": {} }] });
+    assert_eq!(hub.ops(&id_missing.to_string()).await.status, 400);
+    // A new rule goes to the first rule set (the snapshot names it), or to the one it names.
+    let new = |ruleset: Option<&str>| {
+        let mut op = json!({ "op": "new", "family": "DEP", "title": "t", "severity": "critical" });
+        if let Some(name) = ruleset {
+            op["ruleset"] = json!(name);
+        }
+        json!({ "dry_run": true, "ops": [op] }).to_string()
+    };
+    assert_eq!(hub.ops(&new(None)).await.status, 200);
+    assert_eq!(hub.ops(&new(Some("Checklists"))).await.status, 200);
+    assert_eq!(
+        hub.ops(&new(Some(".."))).await.status,
+        403,
+        "a name that is no rule set name has no class"
+    );
+    let not_a_name = json!({ "ops": [{ "op": "new", "family": "DEP", "ruleset": 7 }] });
+    assert_eq!(hub.ops(&not_a_name.to_string()).await.status, 400);
+
+    // A policy that names only another rule set: the first one is not classified, so nothing is written.
+    let other = Arc::new(SourcePolicy::new([("elsewhere".to_owned(), Class::Public)]).unwrap());
+    let closed = start_classified(Some(Arc::clone(&engine)), None, other, None).await;
+    assert_eq!(closed.ops(&new(None)).await.status, 403);
 }

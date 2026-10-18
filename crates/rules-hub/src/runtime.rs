@@ -107,6 +107,13 @@ impl Drop for StreamGuard {
 /// What the routes read of a snapshot: the ids of its rules and its files.
 pub(crate) struct Held {
     pub(crate) ids: HashSet<String>,
+    /// The `source` of each rule that has one (`<rule set name>/<path>`): what the data class of a write is
+    /// worked out from.
+    pub(crate) places: HashMap<String, String>,
+    /// The same for the retired rules (`reinstate` names one of them).
+    pub(crate) retired: HashMap<String, String>,
+    /// The name of the first rule set (`source.id`): where `new` writes when it names none.
+    pub(crate) first_ruleset: Option<String>,
     /// `None` when the snapshot has no `sources`, or one that is not a list of files: the classes
     /// of its files are not known. The ids are read all the same.
     pub(crate) files: Option<Vec<SourceFile>>,
@@ -136,6 +143,11 @@ impl Drop for RulesRuntime {
 #[derive(Deserialize)]
 struct SnapshotParts {
     rules: Vec<RuleId>,
+    /// Read apart, like the files: what is not right here costs the snapshot its retired rules only.
+    #[serde(default)]
+    retired: Option<Value>,
+    #[serde(default)]
+    source: Option<Value>,
     /// Read apart from the rules: a file that is not right must not cost the snapshot its ids.
     #[serde(default)]
     sources: Option<Value>,
@@ -144,6 +156,8 @@ struct SnapshotParts {
 #[derive(Deserialize)]
 struct RuleId {
     id: String,
+    #[serde(default)]
+    source: Option<String>,
 }
 
 impl RulesRuntime {
@@ -245,9 +259,30 @@ impl RulesRuntime {
 }
 
 /// What the routes read of a snapshot's text; `None` without a list of rules.
-fn read_held(text: &[u8]) -> Option<Held> {
+pub(crate) fn read_held(text: &[u8]) -> Option<Held> {
     let doc: SnapshotParts = serde_json::from_slice(text).ok()?;
+    let places = doc
+        .rules
+        .iter()
+        .filter_map(|r| Some((r.id.clone(), r.source.clone()?)))
+        .collect();
+    let retired = doc
+        .retired
+        .and_then(|v| serde_json::from_value::<Vec<RuleId>>(v).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|r| Some((r.id, r.source?)))
+        .collect();
+    let first_ruleset = doc
+        .source
+        .as_ref()
+        .and_then(|v| v.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     Some(Held {
+        places,
+        retired,
+        first_ruleset,
         ids: doc.rules.into_iter().map(|r| r.id).collect(),
         files: doc
             .sources

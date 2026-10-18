@@ -48,7 +48,7 @@ written there could be set by someone else). It says per device what each rule s
 
 A key is the name of a rule set as the engine writes it at the start of a rule's `source`. A file of a rule set with no
 class is **unclassified**: it is still shown to you, marked as "not classified", and nothing unclassified or private is
-released for anything that leaves the hub. A `sources.json` that cannot be read stops the start: a typo must not turn
+released for anything that leaves the hub, and it is **never written**: the hub refuses a change to a rule of a rule set with no class (`write_refused`), so without a `sources.json` the page only reads. A `sources.json` that cannot be read stops the start: a typo must not turn
 into "everything unclassified" without anyone seeing it. The details (strictest key wins, the `#n` names) are in the
 comment at the top of `crates/rules-hub/src/sources.rs`.
 

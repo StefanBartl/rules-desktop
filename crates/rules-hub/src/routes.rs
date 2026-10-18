@@ -243,7 +243,7 @@ async fn open(State(st): State<Arc<Shared>>, body: axum::body::Bytes) -> Respons
 }
 
 /// What a route that reads the held snapshot answers when it is not one.
-fn no_snapshot() -> Response {
+pub(crate) fn no_snapshot() -> Response {
     eprintln!("engine: the snapshot has no list of rules or of files");
     error_body(
         StatusCode::BAD_GATEWAY,
