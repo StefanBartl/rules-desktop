@@ -487,3 +487,109 @@ describe('the places of the history', () => {
     }
   });
 });
+
+describe('writing', () => {
+  const critical = { op: 'set', id: 'DEP-01', patch: { severity: 'critical' }, if_match: 'sha256:5e6671e2dabdab83' };
+
+  it('sends the operations as they are with a client id, says what was saved and offers the way back', async () => {
+    const s = await ready();
+    const outcome = await s.app.write([critical]);
+    expect(outcome?.saved).toBe(1);
+    expect(s.fake.opsRequests).toHaveLength(1);
+    expect(s.fake.opsRequests[0]).toMatchObject({ schema: 1, dry_run: false, ops: [critical] });
+    expect(s.app.notice).toMatchObject({ key: 'write.saved' });
+    expect(s.app.notice?.undo).toEqual([
+      { op: 'set', id: 'DEP-01', patch: { severity: 'recommended' }, if_match: 'sha256:after1' },
+    ]);
+    expect(s.app.writing).toBe(false);
+  });
+
+  it('asks the hub for the state it has after a write, and for the open rule again', async () => {
+    const s = await ready();
+    await s.app.openDetail('DEP-01');
+    const snapshots = s.fake.count('/api/rules/snapshot');
+    const rules = s.fake.count('/api/rules/rule');
+    await s.app.write([critical]);
+    expect(s.fake.count('/api/rules/snapshot')).toBe(snapshots + 1);
+    expect(s.fake.count('/api/rules/rule')).toBe(rules + 1);
+  });
+
+  it('writes nothing for a dry run and leaves the notice alone', async () => {
+    const s = await ready();
+    const snapshots = s.fake.count('/api/rules/snapshot');
+    const outcome = await s.app.write([critical], { dryRun: true });
+    expect(s.fake.opsRequests[0]?.dry_run).toBe(true);
+    expect(outcome?.saved).toBe(0);
+    expect(s.app.notice).toBeNull();
+    expect(s.fake.count('/api/rules/snapshot')).toBe(snapshots);
+  });
+
+  it('takes the Undo as a request of its own, without a way back for the undo, and says it was taken back', async () => {
+    const s = await ready();
+    await s.app.write([critical]);
+    await s.app.undo();
+    expect(s.fake.opsRequests).toHaveLength(2);
+    expect(s.fake.opsRequests[1]?.ops).toEqual([
+      { op: 'set', id: 'DEP-01', patch: { severity: 'recommended' }, if_match: 'sha256:after1' },
+    ]);
+    expect(s.app.notice).toEqual({ key: 'write.undone' });
+  });
+
+  it('keeps a conflict for the conflict center and says nothing was written', async () => {
+    const s = await ready();
+    s.fake.opsAnswer = () => ({
+      status: 200,
+      body: {
+        kind: 'rules.result',
+        dry_run: false,
+        ok: false,
+        results: [
+          { n: 1, ok: false, op: 'set', id: 'DEP-01', changed_ids: [], error: { code: 'conflict', details: { expected: 'sha256:a', actual: 'sha256:b' } } },
+        ],
+      },
+    });
+    const snapshots = s.fake.count('/api/rules/snapshot');
+    const outcome = await s.app.write([critical]);
+    expect(outcome?.conflicts).toHaveLength(1);
+    expect(s.app.conflict).toMatchObject({ id: 'DEP-01', expected: 'sha256:a', actual: 'sha256:b', op: critical });
+    expect(s.app.notice).toEqual({ key: 'write.conflict', params: { id: 'DEP-01' } });
+    expect(s.fake.count('/api/rules/snapshot')).toBe(snapshots);
+    s.app.clearConflict();
+    expect(s.app.conflict).toBeNull();
+  });
+
+  it('tells a refusal of the whole request in its own words', async () => {
+    const s = await ready();
+    for (const [status, code, key] of [
+      [403, 'write_refused', 'write.refused'],
+      [429, 'rate_limited', 'write.rate'],
+      [503, 'engine_unavailable', 'write.unavailable'],
+      [404, 'not_found', 'write.not_held'],
+    ] as const) {
+      s.fake.opsAnswer = () => ({ status, body: { error: { code, message: 'no' } } });
+      expect(await s.app.write([critical])).toBeNull();
+      expect(s.app.notice?.key, code).toBe(key);
+    }
+    s.fake.opsAnswer = () => ({ status: 400, body: { error: { code: 'bad_request', message: 'ops[1] has no op' } } });
+    await s.app.write([critical]);
+    expect(s.app.notice).toEqual({ key: 'write.failed', params: { message: 'ops[1] has no op' } });
+  });
+
+  it('sends one request at a time and nothing when there is nothing to do or the page is not ready', async () => {
+    const s = await ready();
+    expect(await s.app.write([])).toBeNull();
+    const first = s.app.write([critical]);
+    expect(await s.app.write([critical])).toBeNull();
+    await first;
+    expect(s.fake.opsRequests).toHaveLength(1);
+    const cold = setup(false);
+    expect(await cold.app.write([critical])).toBeNull();
+    expect(cold.fake.opsRequests).toHaveLength(0);
+  });
+
+  it('reads the tag of a rule from the snapshot', async () => {
+    const s = await ready();
+    expect(s.app.etagOf('DEP-01')).toBe('sha256:5e6671e2dabdab83');
+    expect(s.app.etagOf('NOPE-01')).toBeNull();
+  });
+});

@@ -1,7 +1,8 @@
 // The hub's routes, as typed calls. Only the shapes the page needs. Every request carries the session as a bearer
 // token and nothing else: no cookie, no cache, no referrer.
 
-import type { Rule, Snapshot } from './contract';
+import type { NextId, Result, Rule, Snapshot } from './contract';
+import type { OpsRequest } from './write';
 
 /** Where the routes of this app live (`IDENTITY.route` of rules-hub). */
 export const API = '/api/rules';
@@ -196,6 +197,25 @@ export class Hub {
       body: JSON.stringify({ id }),
     });
     if (!response.ok) throw await failure(response);
+  }
+
+  /**
+   * Ask the engine to change rules (`rules-ops/1`) through the hub. A refusal of the whole request is an
+   * `ApiError` (`write_refused` for a rule set without a class, `bad_request`, `rate_limited` ...); a part that
+   * failed is told per operation in the document, which the page reads (`write.ts`).
+   */
+  async ops(request: OpsRequest): Promise<Result> {
+    return this.json<Result>(`${API}/ops`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  /** The next free id of a family, or of every family: the engine says it, nothing is reserved. */
+  nextId(family?: string): Promise<NextId> {
+    const query = family ? `?family=${encodeURIComponent(family)}` : '';
+    return this.json<NextId>(`${API}/next_id${query}`);
   }
 
   /** What this build is and which engine answers: only the words the page shows are taken. */

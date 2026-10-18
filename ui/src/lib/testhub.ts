@@ -43,6 +43,28 @@ export class FakeHub {
   goneIds = new Set<string>();
   /** open answers with this status (200: the editor is started). */
   openStatus = 200;
+  /** The requests of `ops` the hub was sent, as parsed. */
+  opsRequests: { dry_run: boolean; ops: Record<string, unknown>[] }[] = [];
+  /** What `ops` answers for a request: a status and a document (default: every operation changed its rule). */
+  opsAnswer: (request: { dry_run: boolean; ops: Record<string, unknown>[] }) => { status: number; body: unknown } = (
+    request,
+  ) => ({
+    status: 200,
+    body: {
+      kind: 'rules.result',
+      dry_run: request.dry_run,
+      ok: true,
+      results: request.ops.map((op, i) => ({
+        n: i + 1,
+        ok: true,
+        op: op['op'],
+        id: op['id'],
+        changed_ids: [op['id']],
+        etag_after: `sha256:after${i + 1}`,
+        inverse: { op: 'set', id: op['id'], patch: { severity: 'recommended' } },
+      })),
+    },
+  });
   searchIds: string[] = [];
   /** The `total` the search answers with; `null`: the number of `searchIds`. */
   searchTotal: number | null = null;
@@ -110,6 +132,12 @@ export class FakeHub {
         });
       case '/api/rules/rescan':
         return new Response(null, { status: 202 });
+      case '/api/rules/ops': {
+        const request = JSON.parse(String(init.body)) as (typeof this.opsRequests)[number];
+        this.opsRequests.push(request);
+        const answer = this.opsAnswer(request);
+        return json(answer.body, answer.status);
+      }
       case '/api/rules/open':
         return this.openStatus === 200
           ? json({ ok: true })

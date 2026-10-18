@@ -12,6 +12,7 @@ import { detectLang, isLang, type Key, type Lang } from './i18n';
 import type { Command } from './keys';
 import { bumped, parseFrecency, type Frecency, type PaletteItem } from './palette';
 import { classOf, sourceIndex } from './sources';
+import { clientOpId, summarize, type Conflict, type Op, type Outcome } from './write';
 
 export type Phase = 'starting' | 'needs_pairing' | 'offline' | 'unavailable' | 'ready';
 export type Connection = 'live' | 'reconnecting' | 'offline';
@@ -45,6 +46,8 @@ export type Detail =
 export interface Notice {
   key: Key;
   params?: Record<string, string>;
+  /** The operations that take back what the notice reports: the toast offers them as Undo. */
+  undo?: Op[];
 }
 
 /** What the page needs from its surroundings; each part is replaced in the tests. */
@@ -700,4 +703,99 @@ export class App {
   dismissNotice(): void {
     this.notice = null;
   }
+
+  // ── writing ─────────────────────────────────────────────────────────────
+
+  /** A request is on its way: the page does not send a second one beside it. */
+  writing = $state(false);
+  /** The operation that met another version of the file: the conflict center shows it (w6); nothing was written. */
+  conflict = $state.raw<Conflict | null>(null);
+  private opCount = 0;
+
+  /** The tag of the file a rule lives in, as the snapshot gave it: what a change must be sent with. */
+  etagOf(id: string): string | null {
+    return this.rules.find((r) => r.id === id)?.etag ?? null;
+  }
+
+  /**
+   * Ask the engine to change rules. The page never decides what a change is: it sends the operations, reads the
+   * document the engine answers with, and shows what came of each. Every change goes with the tag the person saw
+   * (`if_match`), so that nothing is written over a change made since. Returns what came of it, or `null` when the
+   * hub refused the whole request (told in a notice).
+   */
+  async write(ops: Op[], options: { dryRun?: boolean; undoable?: boolean } = {}): Promise<Outcome | null> {
+    if (this.phase !== 'ready' || this.writing || ops.length === 0) return null;
+    const dryRun = options.dryRun === true;
+    this.writing = true;
+    try {
+      this.opCount += 1;
+      const result = await this.env.hub.ops({
+        schema: 1,
+        client_op_id: clientOpId(this.env.now(), this.opCount),
+        dry_run: dryRun,
+        ops,
+      });
+      const outcome = summarize(ops, result);
+      if (dryRun) return outcome;
+      this.reportWrite(outcome, options.undoable !== false);
+      if (outcome.saved > 0) await this.afterWrite(outcome.changedIds);
+      return outcome;
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) return null;
+      const key = error instanceof ApiError ? WRITE_KEYS[error.code] : undefined;
+      this.notice = key
+        ? { key }
+        : { key: 'write.failed', params: { message: error instanceof Error ? error.message : 'failed' } };
+      return null;
+    } finally {
+      this.writing = false;
+    }
+  }
+
+  /** Say what came of a write in one notice; a conflict is also kept for the conflict center. */
+  private reportWrite(outcome: Outcome, undoable: boolean): void {
+    const first = outcome.conflicts[0];
+    this.conflict = first ?? null;
+    if (first) {
+      this.notice = { key: 'write.conflict', params: { id: first.id } };
+    } else if (outcome.failures[0]) {
+      this.notice = { key: 'write.failed', params: { message: outcome.failures[0].message || outcome.failures[0].code } };
+    } else if (outcome.saved > 1) {
+      this.notice = { key: 'write.saved_many', params: { n: String(outcome.saved) }, ...(undoable && outcome.undo.length ? { undo: outcome.undo } : {}) };
+    } else if (outcome.saved === 1) {
+      this.notice = { key: 'write.saved', ...(undoable && outcome.undo.length ? { undo: outcome.undo } : {}) };
+    }
+  }
+
+  /** The hub has read the new state before it answered: read it here, and the rule that is open again. */
+  private async afterWrite(changed: readonly string[]): Promise<void> {
+    await this.refresh();
+    const open = this.detail.state === 'none' ? null : this.detail.id;
+    if (open !== null && changed.includes(open)) await this.loadDetail(open);
+  }
+
+  /** Take back what the notice reports: its operations go as a request of their own, with no Undo for the undo. */
+  async undo(): Promise<void> {
+    const ops = this.notice?.undo;
+    if (!ops || ops.length === 0) return;
+    this.notice = null;
+    const outcome = await this.write(ops, { undoable: false });
+    if (outcome && outcome.saved > 0 && outcome.conflicts.length === 0 && outcome.failures.length === 0) {
+      this.notice = { key: 'write.undone' };
+    }
+  }
+
+  /** Forget the conflict (the person looked at it or went on). */
+  clearConflict(): void {
+    this.conflict = null;
+  }
 }
+
+/** The words for the refusals of the hub that have their own (by the code of the error document). */
+const WRITE_KEYS: Record<string, Key> = {
+  write_refused: 'write.refused',
+  rate_limited: 'write.rate',
+  engine_unavailable: 'write.unavailable',
+  not_found: 'write.not_held',
+};
+

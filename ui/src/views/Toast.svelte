@@ -13,6 +13,9 @@
   {#if notice}
     <div class="toast">
       <span>{t(notice.key, notice.params ?? {})}</span>
+      {#if notice.undo}
+        <button type="button" class="undo" onclick={() => void app.undo()}>{t('write.undo')}</button>
+      {/if}
       <button type="button" class="close" aria-label={t('detail.close')} onclick={() => app.dismissNotice()}>×</button>
     </div>
   {/if}
@@ -36,6 +39,14 @@
     border-radius: var(--radius);
     box-shadow: var(--shadow);
     padding: 0.5rem 0.75rem;
+  }
+  .undo {
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    color: var(--accent);
+    cursor: pointer;
+    padding: 0.1rem 0.5rem;
   }
   .close {
     background: none;
