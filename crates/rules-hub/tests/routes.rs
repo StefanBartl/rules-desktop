@@ -1462,6 +1462,52 @@ async fn a_rule_set_is_named_as_the_snapshot_names_it_not_by_its_last_folder() {
     assert_eq!(hub.ops(&new("two/Checklists")).await.status, 404);
 }
 
+#[tokio::test]
+async fn a_rule_set_is_archived_by_the_name_the_snapshot_gives_it_and_never_when_its_files_are_not_known(
+) {
+    // Named `one/Checklists` by the snapshot: the folder name `Checklists` is only mentioned inside it, and the class
+    // worked out for that would not be the class of the folder the engine moves.
+    let engine = FakeEngine::new();
+    let renamed = SNAPSHOT
+        .trim_end()
+        .replace("Checklists/", "one/Checklists/")
+        .replace(
+            r#""source":{"id":"Checklists"}"#,
+            r#""source":{"id":"one/Checklists"}"#,
+        );
+    *engine.snapshot.lock().unwrap() = renamed;
+    let hub = start_writable(&engine).await;
+    let r = hub
+        .ops(&ruleset_body("archive_ruleset", Some("Checklists")))
+        .await;
+    assert_eq!(r.status, 404, "{r:?}");
+    assert_eq!(engine.count("ops"), 0);
+    let r = hub
+        .ops(&ruleset_body("archive_ruleset", Some("one/Checklists")))
+        .await;
+    assert_eq!(r.status, 200, "{r:?}");
+
+    // A snapshot that does not say which files it holds: nothing is known of what a folder holds, so none is moved.
+    let blind = FakeEngine::new();
+    let mut doc: Value = serde_json::from_str(SNAPSHOT).unwrap();
+    doc.as_object_mut().unwrap().remove("sources");
+    doc["digest"] = json!("sha256:4444444444444444");
+    *blind.snapshot.lock().unwrap() = doc.to_string();
+    let hub = start_writable(&blind).await;
+    let r = hub
+        .ops(&ruleset_body("archive_ruleset", Some("anything")))
+        .await;
+    assert_eq!(r.status, 403, "{r:?}");
+    assert_eq!(blind.count("ops"), 0);
+    // Making and bringing back need no files.
+    assert_eq!(
+        hub.ops(&ruleset_body("create_ruleset", Some("x")))
+            .await
+            .status,
+        200
+    );
+}
+
 // ── the waivers of the project of this device ───────────────────────────────────
 
 async fn start_with_project(engine: &Arc<FakeEngine>, project: Option<&std::path::Path>) -> Hub {

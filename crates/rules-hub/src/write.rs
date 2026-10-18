@@ -210,7 +210,7 @@ pub(crate) fn authorize(
 /// is loaded again, with the class it has, or none). Archiving is a change of the vault like a write: a rule set that has
 /// no class on this device is never moved. A rule set the snapshot names is judged by its class; one
 /// that the snapshot does not mention at all holds no rule (an empty one just made, or none of that name: the engine says),
-/// so there is nothing to protect; a name the snapshot only mentions inside another name (`one/Checklists`) is refused,
+/// so there is nothing to protect (a snapshot whose files are not known protects nothing: closed); a name the snapshot only mentions inside another name (`one/Checklists`) is refused,
 /// because the class worked out for it here would not be the class of the folder the engine moves.
 fn check_ruleset_op(
     policy: &SourcePolicy,
@@ -228,6 +228,10 @@ fn check_ruleset_op(
         return Ok(());
     }
     if !names_a_ruleset(held, name) {
+        // Without the files of the snapshot nothing is known of what the folder holds: closed.
+        if held.files.is_none() {
+            return Err(not_written(n));
+        }
         if mentions_a_ruleset(held, name) {
             return Err(Refusal {
                 status: StatusCode::NOT_FOUND,

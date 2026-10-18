@@ -916,3 +916,21 @@ describe('the rule sets of the vault', () => {
     expect(s.app.notice?.key).toBe('write.failed');
   });
 });
+
+describe('the list of rule sets follows the snapshot', () => {
+  it('is dropped when a new snapshot arrives, so that the view reads it again', async () => {
+    const s = await ready();
+    await s.app.loadRulesets();
+    expect(s.app.rulesets).not.toBeNull();
+    s.fake.dropRule('LUA-01');
+    await s.app.refresh();
+    expect(s.app.rulesets).toBeNull();
+  });
+
+  it('is kept when the snapshot did not change', async () => {
+    const s = await ready();
+    await s.app.loadRulesets();
+    await s.app.refresh();
+    expect(s.app.rulesets).not.toBeNull();
+  });
+});

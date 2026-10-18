@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { expectAccessible, violations, watchViolations } from './a11y';
@@ -614,4 +614,18 @@ test('a rule set is made, moved to the archive and brought back, and nothing is 
   await page.locator('li#archived-delta').getByRole('button', { name: 'Restore' }).click();
   await expect(row).toBeVisible();
   expect(existsSync(join(vault, 'archive', 'rulesets', 'delta'))).toBe(false);
+
+  // A change from outside (the editor, git): a rule set with a rule moves away, the snapshot changes, and the list
+  // follows without the view being opened again.
+  const rules = join(vault, 'rulesets', 'delta', '_rules', 'DX');
+  mkdirSync(rules, { recursive: true });
+  writeFileSync(
+    join(rules, 'DX-01.md'),
+    ['---', 'id: DX-01', 'severity: recommended', 'family: DX', '---', '', '#### `DX-01` — outside', '', '```rule', 'id = "DX-01",', '```', '', 'The text.', '', '---', ''].join(String.fromCharCode(10)),
+  );
+  await expect(page.locator('tr#ruleset-delta')).toContainText('1');
+  mkdirSync(join(vault, 'archive', 'rulesets'), { recursive: true });
+  renameSync(join(vault, 'rulesets', 'delta'), join(vault, 'archive', 'rulesets', 'delta'));
+  await expect(row).toHaveCount(0);
+  await expect(page.locator('li#archived-delta')).toBeVisible();
 });

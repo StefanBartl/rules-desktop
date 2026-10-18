@@ -347,8 +347,10 @@ export class App {
       if (result.kind === 'fresh') {
         this.snapshot = result.doc;
         this.etag = result.etag;
-        // The classes are of the files of a snapshot: a new snapshot may have other files.
+        // The classes are of the files of a snapshot: a new snapshot may have other files. So may the vault: a rule set
+        // moved to the archive or made elsewhere is read again by the view that shows them.
         this.sources = null;
+        this.rulesets = null;
       }
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return;

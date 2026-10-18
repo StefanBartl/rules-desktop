@@ -48,8 +48,9 @@
     if (await app.makeRuleset(name)) newRuleset = '';
   }
 
+  // Read when the view opens, and again whenever a new snapshot dropped the list (the vault may have changed).
   $effect(() => {
-    void app.loadRulesets();
+    if (app.rulesets === null) void app.loadRulesets();
   });
 
   async function add(): Promise<void> {
