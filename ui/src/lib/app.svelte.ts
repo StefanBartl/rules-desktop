@@ -12,7 +12,7 @@ import { detectLang, isLang, type Key, type Lang } from './i18n';
 import type { Command } from './keys';
 import { bumped, parseFrecency, type Frecency, type PaletteItem } from './palette';
 import { classOf, sourceIndex } from './sources';
-import { clientOpId, summarize, type Conflict, type Op, type Outcome } from './write';
+import { clientOpId, nextOf, summarize, type Conflict, type Op, type Outcome } from './write';
 
 export type Phase = 'starting' | 'needs_pairing' | 'offline' | 'unavailable' | 'ready';
 export type Connection = 'live' | 'reconnecting' | 'offline';
@@ -711,6 +711,26 @@ export class App {
   /** The operation that met another version of the file: the conflict center shows it (w6); nothing was written. */
   conflict = $state.raw<Conflict | null>(null);
   private opCount = 0;
+
+  /** The dialog for a new rule is open. */
+  newRuleOpen = $state(false);
+
+  openNewRule(): void {
+    if (this.phase === 'ready') this.newRuleOpen = true;
+  }
+
+  closeNewRule(): void {
+    this.newRuleOpen = false;
+  }
+
+  /** The next free id of a family, as the engine says it; `null` when it names none or cannot be asked. */
+  async nextId(family: string): Promise<string | null> {
+    try {
+      return nextOf(await this.env.hub.nextId(family), family);
+    } catch {
+      return null;
+    }
+  }
 
   /** The tag of the file a rule lives in, as the snapshot gave it: what a change must be sent with. */
   etagOf(id: string): string | null {

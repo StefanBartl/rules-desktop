@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Result } from './contract';
-import { clientOpId, reinstateOp, retireOp, setOp, summarize, type Op } from './write';
+import { clientOpId, newOp, nextOf, reinstateOp, retireOp, setOp, summarize, type Op } from './write';
+import type { NextId } from './contract';
 
 /** An answer of the engine with the entries a test names. */
 function result(entries: unknown[], dryRun = false): Result {
@@ -108,5 +109,45 @@ describe('the operations the page builds', () => {
       expect(clientOpId(now, n)).toMatch(/^[A-Za-z0-9._:-]{1,64}$/);
     }
     expect(clientOpId(5, 1)).not.toBe(clientOpId(5, 2));
+  });
+});
+
+describe('a new rule', () => {
+  it('leaves out what is empty and keeps the rest as it was typed', () => {
+    expect(newOp({ family: 'DEP', title: 't', severity: 'critical' })).toEqual({
+      op: 'new',
+      family: 'DEP',
+      title: 't',
+      severity: 'critical',
+    });
+    expect(
+      newOp({ family: 'DEP', title: 't', severity: 'critical', text: 'x', check: { type: 'grep' }, agent: { q: 1 }, ruleset: 'one/Checklists' }),
+    ).toEqual({
+      op: 'new',
+      family: 'DEP',
+      title: 't',
+      severity: 'critical',
+      text: 'x',
+      check: { type: 'grep' },
+      agent: { q: 1 },
+      ruleset: 'one/Checklists',
+    });
+    expect(newOp({ family: 'A', title: 't', severity: 's', text: '', check: null, ruleset: '' })).not.toHaveProperty('check');
+  });
+
+  it('reads the next id of a family from the answer of the engine', () => {
+    const doc = { items: [{ family: 'DEP', next: 'DEP-10' }, { family: 'ERR' }] } as unknown as NextId;
+    expect(nextOf(doc, 'DEP')).toBe('DEP-10');
+    expect(nextOf(doc, 'ERR')).toBeNull();
+    expect(nextOf(doc, 'NEW')).toBeNull();
+  });
+
+  it('names the id of a dry run, which saves nothing', () => {
+    const out = summarize(
+      [],
+      { kind: 'rules.result', dry_run: true, ok: true, results: [{ n: 1, ok: true, op: 'new', id: 'DEP-10', changed_ids: [] }] } as unknown as Result,
+    );
+    expect(out.ids).toEqual(['DEP-10']);
+    expect(out.saved).toBe(0);
   });
 });

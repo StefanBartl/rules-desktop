@@ -19,6 +19,7 @@ export function paletteActions(app: App): PaletteAction[] {
     add(`go.${view}`, t('palette.go', { view: t(`nav.${view}`) }), () => app.setView(view));
   }
   add('rescan', t('menu.rescan'), () => app.reload());
+  add('rule.new', t('palette.new'), () => app.openNewRule());
   if (isActive(app.filter)) add('filter.reset', t('palette.filter_reset'), () => app.resetFilter());
   if (app.shortcuts) add('shortcuts.off', t('palette.shortcuts.off'), () => app.setShortcuts(false));
   else add('shortcuts.on', t('palette.shortcuts.on'), () => app.setShortcuts(true));

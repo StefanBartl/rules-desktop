@@ -34,6 +34,7 @@
 
 <section aria-labelledby="rules-h">
   <h2 id="rules-h">{t('nav.rules')}</h2>
+  <button type="button" class="new" onclick={() => app.openNewRule()}>{t('new.open')}</button>
 
   <div class="bar" role="group" aria-label={t('filter.label')}>
     <MultiSelect
@@ -129,6 +130,7 @@
     border-radius: var(--radius);
     padding: 0.35rem 0.6rem;
   }
+  .new,
   .bar > button {
     background: none;
     border: 1px solid var(--line);

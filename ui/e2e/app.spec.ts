@@ -229,6 +229,11 @@ for (const scheme of ['light', 'dark'] as const) {
     await detail.getByRole('button', { name: 'Retire' }).click();
     await expectAccessible(page, `retire form ${scheme}`);
     await detail.getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('button', { name: 'New rule …' }).click();
+    await expect(page.getByRole('dialog', { name: 'New rule' })).toBeVisible();
+    await expectAccessible(page, `new rule ${scheme}`);
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'New rule' })).toHaveCount(0);
     await page.keyboard.press('Control+k');
     await expect(page.getByRole('dialog')).toBeVisible();
     await expectAccessible(page, `palette ${scheme}`);
@@ -353,4 +358,44 @@ test('a rule is edited, taken back, retired and reinstated in the browser, and o
   await view(page, 'Rules');
   await expect(page.locator('tr#rule-WR-02')).toBeVisible();
   await expect.poll(() => changedFiles(state().vault)).toEqual([]);
+});
+
+test('a new rule is previewed, made with the next id and taken back, and only its own file appears', async ({ page }) => {
+  await pair(page);
+  await view(page, 'Rules');
+  await page.getByRole('button', { name: 'New rule …' }).click();
+  const dialog = page.getByRole('dialog', { name: 'New rule' });
+  await dialog.getByLabel('Family (letters, e.g. DEP)').fill('WR');
+  // The engine names the next id of the family (WR-01 to WR-03 exist, one of them was retired and came back).
+  await expect(dialog.getByText('Next id: WR-04')).toBeVisible();
+  await dialog.getByLabel('Title (one line)').fill('A brand new rule');
+  await dialog.getByLabel('Severity').selectOption('critical');
+  await dialog.getByLabel('Text').fill('What the new rule says.');
+  // The first rule set is alpha: the rule is made in gamma, where the page may write one file per rule.
+  await dialog.getByLabel('Rule set (name; empty: the first)').fill('gamma');
+
+  // Preview: the engine says what would happen, and nothing is written.
+  await dialog.getByRole('button', { name: 'Preview' }).click();
+  await expect(dialog.getByText('This would create WR-04.')).toBeVisible();
+  expect(changedFiles(state().vault)).toEqual([]);
+
+  // Create: the dialog closes, the new rule is open, and one file appeared.
+  await dialog.getByRole('button', { name: 'Create' }).click();
+  await expect(dialog).toHaveCount(0);
+  const detail = page.getByRole('complementary', { name: 'Rule' });
+  await expect(detail.getByRole('heading', { name: 'WR-04' })).toBeVisible();
+  await expect(page.locator('tr#rule-WR-04')).toBeVisible();
+  const files = () => changedFiles(state().vault);
+  expect(files()).toHaveLength(1);
+  expect(files()[0]).toContain('_rules/WR/WR-04.md');
+  const written = readFileSync(join(state().vault, 'rulesets', 'gamma', '_rules', 'WR', 'WR-04.md'), 'utf8');
+  expect(written).toContain('id: WR-04');
+  expect(written).toContain('severity: critical');
+  expect(written).toContain('What the new rule says.');
+
+  // Undo: the engine's way back retires the new rule (its id stays taken), so it leaves the list.
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(page.locator('tr#rule-WR-04')).toHaveCount(0);
+  expect(files().every((l) => l.includes('WR-04'))).toBe(true);
+  expect(files().some((l) => l.includes('_retired'))).toBe(true);
 });

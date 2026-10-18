@@ -52,7 +52,7 @@ export function unchanged(rule: Body, draft: Draft): boolean {
 }
 
 /** Read a field that is data: empty takes it away (`null`), anything else must be a JSON object. */
-function dataPatch(draft: string): { ok: true; value: unknown } | { ok: false } {
+export function dataPatch(draft: string): { ok: true; value: unknown } | { ok: false } {
   const trimmed = draft.trim();
   if (trimmed === '') return { ok: true, value: null };
   try {

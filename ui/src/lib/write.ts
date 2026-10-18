@@ -2,7 +2,7 @@
 // and what to make of the answer (what was saved, what clashed, what undoes it). The rules are the engine's: nothing
 // here formats or parses a rule, it only passes on what the person typed and reads the engine's document.
 
-import type { Result } from './contract';
+import type { NextId, Result } from './contract';
 
 /** One operation of a request: its name and its fields. The engine checks the rest, strictly. */
 export type Op = { op: string } & Record<string, unknown>;
@@ -44,6 +44,8 @@ export interface Outcome {
   /** Entries that changed a rule (a dry run saves nothing). */
   saved: number;
   changedIds: string[];
+  /** The ids of the entries that went through, a dry run's too (what a new rule would be called). */
+  ids: string[];
   conflicts: Conflict[];
   failures: Failure[];
   warnings: string[];
@@ -65,7 +67,7 @@ function text(value: unknown): string | null {
 
 /** Read the engine's answer for a request. `request` is the list of operations that was sent. */
 export function summarize(request: readonly Op[], result: Result): Outcome {
-  const out: Outcome = { saved: 0, changedIds: [], conflicts: [], failures: [], warnings: [], undo: [] };
+  const out: Outcome = { saved: 0, changedIds: [], ids: [], conflicts: [], failures: [], warnings: [], undo: [] };
   for (const entry of result.results) {
     const id = entry.id ?? null;
     if (entry.warnings) out.warnings.push(...entry.warnings);
@@ -85,6 +87,7 @@ export function summarize(request: readonly Op[], result: Result): Outcome {
       }
       continue;
     }
+    if (entry.id) out.ids.push(entry.id);
     if (result.dry_run || entry.changed_ids.length === 0) continue;
     out.saved += 1;
     out.changedIds.push(...entry.changed_ids);
@@ -125,6 +128,33 @@ export function retireOp(id: string, ifMatch: string, extra: { replaced_by?: str
   if (extra.replaced_by) op['replaced_by'] = extra.replaced_by;
   if (extra.reason) op['reason'] = extra.reason;
   return op;
+}
+
+/** What a new rule is made of. The optional parts are left out of the request when they are empty. */
+export interface NewRule {
+  family: string;
+  title: string;
+  severity: string;
+  text?: string;
+  check?: unknown;
+  agent?: unknown;
+  /** The name of the rule set; none: the first one. */
+  ruleset?: string;
+}
+
+/** Make a rule with the next free id of its family (the engine picks it, under the lock of the rule set). */
+export function newOp(rule: NewRule): Op {
+  const op: Op = { op: 'new', family: rule.family, title: rule.title, severity: rule.severity };
+  if (rule.text) op['text'] = rule.text;
+  if (rule.check !== undefined && rule.check !== null) op['check'] = rule.check;
+  if (rule.agent !== undefined && rule.agent !== null) op['agent'] = rule.agent;
+  if (rule.ruleset) op['ruleset'] = rule.ruleset;
+  return op;
+}
+
+/** The next id the engine named for a family, or `null` (a family it does not have yet, or none left). */
+export function nextOf(doc: NextId, family: string): string | null {
+  return doc.items.find((item) => item.family === family)?.next ?? null;
 }
 
 /** Bring a retired rule back to the file it came from. */
