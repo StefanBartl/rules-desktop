@@ -5,9 +5,9 @@ browse the rules, search them, and later create, change, retire and move them, i
 native app after that. The sibling of [tasks-desktop](https://github.com/StefanBartl/tasks-desktop), built on the same
 parts and meant to look and behave like it.
 
-**Status: early development. Nothing is released.** The read-only interface works: the hub serves families, rules,
+**Status: early development. No release yet.** The newest state of `main` is on the pre-release [`latest`](https://github.com/StefanBartl/rules-desktop/releases/tag/latest) (a Windows program and a Linux archive, rebuilt after every green CI run, unsigned). The read-only interface works: the hub serves families, rules,
 search, findings and the rule detail, follows the rule files live and passes its security matrix, axe and a corpus of
-hostile rules in the browser. Writing rules and the native shell follow the phases below. Do not expect a download. How to
+hostile rules in the browser. Writing rules and the native shell follow the phases below. It is not a release: use it to look, not to rely on. How to
 use it: [docs/USAGE.md](docs/USAGE.md), a walk through one sitting in [docs/WORKFLOW.md](docs/WORKFLOW.md); what it does about security: [docs/SECURITY.md](docs/SECURITY.md).
 
 ## What it is for

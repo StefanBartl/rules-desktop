@@ -1,0 +1,188 @@
+# The rolling build: after every green CI run on main, the program of exactly that commit is built for
+# Windows and Linux and put on the pre-release `latest`, whose assets are replaced each time. It is
+# for looking at the newest state with a click, not a release: no version tag, not signed, no
+# checksums beyond SHA256SUMS. A release stays a deliberate act (release.yml, rule NREL-07).
+#
+#   rules-hub-windows-x86_64.exe        a double click sets up and starts the hub, and opens the browser
+#   rules-hub-linux-x86_64.tar.gz       the same program for Linux (the archive keeps the executable bit)
+#   SHA256SUMS                          the checksums of both
+#
+# What the release page says (the tag `latest`, the title, the notes) moves LAST, after both files and
+# their checksums are in place: a run that fails or is cancelled in between leaves the page naming the
+# previous commit, never a new one with files of two commits. SHA256SUMS is taken away first, so a
+# page with files of two commits has none rather than a stale one.
+#
+# Only the newest commit of main is built: a CI run of an older commit (finished late, or re-run by hand)
+# does not move `latest` backwards.
+#
+# Actions are pinned by commit (NREL-03); a job gets only the rights it needs; `latest` is moved to the
+# commit through the API (no token is left in a checkout).
+
+name: rolling
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+
+# One build at a time, and a running build is never cancelled: the pre-release must end on the newest commit. A
+# build that is cancelled by a later run left the page on an old commit when that later run was the CI of an OLDER
+# commit that finished late (it builds nothing, `prepare` finds it is not the tip of main, but it had cancelled the
+# build of the tip). A run that finds its commit is no longer the tip of main stops in `prepare`, so a waiting run
+# costs seconds. The runs that do nothing (a failed CI, a pull request) have a group of their own.
+concurrency:
+  group: rolling-${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    # Only a green run that came from a push to main (not a pull request).
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      current: ${{ steps.facts.outputs.current }}
+      sha: ${{ steps.facts.outputs.sha }}
+      short: ${{ steps.facts.outputs.short }}
+    steps:
+      - name: Is this the newest commit of main, and does the pre-release exist
+        id: facts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -eu
+          short="$(printf '%s' "$SHA" | cut -c1-7)"
+          tip="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "short=$short" >> "$GITHUB_OUTPUT"
+          if [ "$tip" != "$SHA" ]; then
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$short is not the tip of main ($tip): nothing is built for it"
+            exit 0
+          fi
+          echo "current=true" >> "$GITHUB_OUTPUT"
+          # The release page is made once (at this commit); afterwards only its files and, last, its words change.
+          if ! gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create latest --repo "$GITHUB_REPOSITORY" --prerelease --latest=false --target "$SHA" \
+              --title "Rolling build (starting)" --notes "The first rolling build is being made."
+          fi
+          # No checksums for files that are about to change.
+          gh release delete-asset latest SHA256SUMS --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
+
+  build:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.current == 'true' }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            program: rules-hub.exe
+            asset: rules-hub-windows-x86_64.exe
+          - os: ubuntu-22.04
+            program: rules-hub
+            asset: rules-hub-linux-x86_64.tar.gz
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      # The interface is part of the binary (NREL-04): it is built first, then the program.
+      - name: Build the interface
+        working-directory: ui
+        run: |
+          npm install --global pnpm@11.28.2
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: Build the program
+        env:
+          RULES_HUB_BUILD: ${{ needs.prepare.outputs.short }}
+        run: cargo build --release --locked -p rules-hub
+      - name: Pack and look at what it says
+        id: pack
+        env:
+          SHORT: ${{ needs.prepare.outputs.short }}
+        run: |
+          set -eu
+          got="$(target/release/${{ matrix.program }} --version)"
+          case "$got" in
+            *"(build ${SHORT})") ;;
+            *) echo "::error::the program says '$got', it should name the build ${SHORT}"; exit 1 ;;
+          esac
+          if [ "${{ matrix.program }}" = "rules-hub.exe" ]; then
+            cp target/release/rules-hub.exe "${{ matrix.asset }}"
+          else
+            mkdir -p stage
+            cp target/release/rules-hub LICENSE stage/
+            COPYFILE_DISABLE=1 tar -czf "${{ matrix.asset }}" -C stage .
+          fi
+      - name: Replace the asset of the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload latest "${{ matrix.asset }}" --repo "$GITHUB_REPOSITORY" --clobber
+
+  sums:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: The checksums of both files
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir -p assets
+          gh release download latest --repo "$GITHUB_REPOSITORY" --dir assets --pattern 'rules-hub-*' --clobber
+          count="$(ls assets | wc -l)"
+          if [ "$count" -ne 2 ]; then
+            echo "::error::$count file(s) instead of 2: a system is missing"
+            exit 1
+          fi
+          (cd assets && sha256sum rules-hub-* > SHA256SUMS && cat SHA256SUMS)
+          gh release upload latest assets/SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+
+  # The words of the release page, last: only now does the page name this commit.
+  announce:
+    needs: [prepare, sums]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - name: Move latest to this commit and name it on the page
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+          SHORT: ${{ needs.prepare.outputs.short }}
+        run: |
+          set -eu
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/latest" -f sha="$SHA" -F force=true >/dev/null
+          {
+            cat .github/rolling-notes.md
+            printf '\nBuilt from commit `%s`.\n' "$SHA"
+          } > notes.md
+          gh release edit latest --repo "$GITHUB_REPOSITORY" --prerelease --latest=false \
+            --title "Rolling build ($SHORT)" --notes-file notes.md

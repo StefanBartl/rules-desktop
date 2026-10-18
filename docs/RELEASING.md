@@ -15,6 +15,16 @@ the rules the first release follows, so they are not decided under time pressure
   with a `SHA256SUMS` file. The workflow is modelled on the one of
   [tasks-desktop](https://github.com/StefanBartl/tasks-desktop) and arrives with the hub.
 
+## The rolling build
+
+After every green `ci` run on `main`, [`rolling.yml`](../.github/workflows/rolling.yml) builds the program of exactly
+that commit (the interface first, then `cargo build --release --locked`) for Windows and Linux and replaces the files
+of the pre-release `latest`. It is for looking at the newest state with a click, not a release: no version tag, not
+signed, `SHA256SUMS` only. `rules-hub --version` names the commit (`rules-hub 0.0.0 (build abc1234)`). Only the tip of
+`main` is built, and a running build is never cancelled by a later run (a late CI run of an older commit once
+cancelled the build of the tip in tasks-desktop and left the page on an old commit). The page of the release says
+what it is: `.github/rolling-notes.md`.
+
 ## The engine pin
 
 `engine.lock` names the commits of `rules.nvim` and `lib.nvim` this app is built and tested

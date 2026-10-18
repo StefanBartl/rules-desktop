@@ -58,10 +58,26 @@ pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// The line `--version` prints: `rules-hub 0.0.0`.
+/// What a build that is not a release says about itself (the commit it was made from): set by the
+/// workflow of the rolling build through `RULES_HUB_BUILD`, absent in a release and in a local build.
+pub const BUILD: Option<&str> = option_env!("RULES_HUB_BUILD");
+
+/// The line `--version` prints: `rules-hub 0.0.0`, and `rules-hub 0.0.0 (build abc1234)` for a rolling
+/// build. A release is exactly the first form (the release workflow compares it with the tag).
 #[must_use]
 pub fn version_line() -> String {
-    format!("{} {}", IDENTITY.binary, version())
+    version_line_for(BUILD)
+}
+
+/// [`version_line`] for a given build (so that both forms are testable: `BUILD` is fixed at compile time).
+#[must_use]
+pub fn version_line_for(build: Option<&str>) -> String {
+    match build {
+        Some(build) if !build.is_empty() => {
+            format!("{} {} (build {build})", IDENTITY.binary, version())
+        }
+        _ => format!("{} {}", IDENTITY.binary, version()),
+    }
 }
 
 /// The routes that need a session, by name under `/api/rules/`: every route of [`ROUTES`], so the
@@ -144,5 +160,16 @@ mod tests {
     #[test]
     fn version_is_semver_shaped() {
         assert_eq!(version().split('.').count(), 3);
+    }
+
+    #[test]
+    fn a_rolling_build_names_its_commit_and_a_release_does_not() {
+        let release = format!("rules-hub {}", version());
+        assert_eq!(version_line_for(None), release);
+        assert_eq!(version_line_for(Some("")), release);
+        assert_eq!(
+            version_line_for(Some("abc1234")),
+            format!("{release} (build abc1234)")
+        );
     }
 }
