@@ -45,6 +45,13 @@ export class FakeHub {
   openStatus = 200;
   /** What `waivers` answers: a status and a document (default: the golden waivers of a project). */
   waiversAnswer: () => { status: number; body: unknown } = () => ({ status: 200, body: waiversDoc() });
+  /** The bodies `sources/class` was sent, as parsed. */
+  classRequests: Record<string, unknown>[] = [];
+  /** What `sources/class` answers for a body: a status and a document (default: written). */
+  classAnswer: (body: Record<string, unknown>) => { status: number; body: unknown } = () => ({
+    status: 200,
+    body: { ok: true },
+  });
   /** The requests of `ops` the hub was sent, as parsed. */
   opsRequests: { dry_run: boolean; ops: Record<string, unknown>[] }[] = [];
   /** What `ops` answers for a request: a status and a document (default: every operation changed its rule). */
@@ -113,6 +120,12 @@ export class FakeHub {
       }
       case '/api/rules/sources':
         return json(hubSourcesDoc());
+      case '/api/rules/sources/class': {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        this.classRequests.push(body);
+        const answer = this.classAnswer(body);
+        return json(answer.body, answer.status);
+      }
       case '/api/rules/rule': {
         const id = url.searchParams.get('id') ?? '';
         const held = (JSON.parse(this.snapshotText) as { rules: { id: string }[] }).rules.some((r) => r.id === id);

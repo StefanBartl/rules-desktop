@@ -789,3 +789,59 @@ describe('the waivers', () => {
     expect(s.app.waiveDraft).toBe('DEP-01');
   });
 });
+
+describe('the data classes', () => {
+  const loosen = { key: 'checklists', class: 'public' as const };
+  const needsWord = (body: Record<string, unknown>) =>
+    body['confirm_loosen'] === true
+      ? { status: 200, body: { ok: true } }
+      : { status: 409, body: { error: { code: 'confirm_needed', message: 'no' } } };
+
+  it('sends the change, reads the classes again and says it is saved', async () => {
+    const s = await ready();
+    const reads = s.fake.count('/api/rules/sources');
+    await s.app.setClass({ key: 'checklists', class: 'private' });
+    expect(s.fake.classRequests).toEqual([{ key: 'checklists', class: 'private' }]);
+    expect(s.fake.count('/api/rules/sources')).toBe(reads + 1);
+    expect(s.app.notice).toEqual({ key: 'classes.saved' });
+    expect(s.app.classConfirm).toBeNull();
+  });
+
+  it('keeps a change that releases more and asks, without reading or saying saved', async () => {
+    const s = await ready();
+    s.fake.classAnswer = needsWord;
+    const reads = s.fake.count('/api/rules/sources');
+    await s.app.setClass(loosen);
+    expect(s.app.classConfirm).toEqual(loosen);
+    expect(s.fake.count('/api/rules/sources')).toBe(reads);
+    expect(s.app.notice).not.toEqual({ key: 'classes.saved' });
+  });
+
+  it('sends it again with the word of the person when they say yes', async () => {
+    const s = await ready();
+    s.fake.classAnswer = needsWord;
+    await s.app.setClass(loosen);
+    await s.app.confirmClass();
+    expect(s.fake.classRequests).toEqual([loosen, { ...loosen, confirm_loosen: true }]);
+    expect(s.app.classConfirm).toBeNull();
+    expect(s.app.notice).toEqual({ key: 'classes.saved' });
+  });
+
+  it('sends nothing more when the person says no', async () => {
+    const s = await ready();
+    s.fake.classAnswer = needsWord;
+    await s.app.setClass(loosen);
+    s.app.cancelClass();
+    await s.app.confirmClass();
+    expect(s.app.classConfirm).toBeNull();
+    expect(s.fake.classRequests).toEqual([loosen]);
+  });
+
+  it('says it failed on any other refusal and keeps no question open', async () => {
+    const s = await ready();
+    s.fake.classAnswer = () => ({ status: 400, body: { error: { code: 'bad_request', message: 'no' } } });
+    await s.app.setClass(loosen);
+    expect(s.app.notice).toEqual({ key: 'classes.failed' });
+    expect(s.app.classConfirm).toBeNull();
+  });
+});

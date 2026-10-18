@@ -54,6 +54,11 @@ released for anything that leaves the hub, and it is **never written**: the hub 
 into "everything unclassified" without anyone seeing it. The details (strictest key wins, the `#n` names) are in the
 comment at the top of `crates/rules-hub/src/sources.rs`.
 
+You do not have to edit the file by hand: the **Sources** view (`g s`) lists the keys with their class and the number of files,
+sets or takes away a class, sets the class of a file no key names (`default`) and adds a key. The hub writes the file
+itself and the new classes are in force at once. A change that **releases more** than before (a more open class, a key taken
+away that held something back, a default where there was none) is asked first; "No" writes nothing.
+
 ## The page
 
 | View | What it shows |
@@ -62,6 +67,7 @@ comment at the top of `crates/rules-hub/src/sources.rs`.
 | Families | One row per family with its counters; a row opens the list narrowed to it. |
 | Coverage | Per family and per gate: how many rules have a check that runs by itself, only a question for an agent, or are manual. A row opens the list of its family (a gate, of its families). |
 | Waivers | The waivers of the project of this device: rule, reason, last day, paths, and whether a waiver has expired or is for a rule that is not loaded. Waive, renew (a new last day or none) and remove, with Undo. Needs `project` (below). |
+| Sources | The data classes of this device (`sources.json`): the keys with class and number of files, the default, and the files that have no class. Set, take away or add a class; a change that releases more is asked first. |
 | Rules | The list, with filters for family, severity and kind of check, and a search over titles and, once the hub has read them, over the texts. |
 
 A rule opens beside the list: its text as text, its file and line (copy, or **Open in Neovim**, which starts an editor on
@@ -69,7 +75,7 @@ the machine the hub runs on), the version of its file, and its check and agent q
 run. The page follows the rule files: when one changes on disk, the list changes by itself, and a window that gets the
 focus back asks for a scan.
 
-Keys: `g h`, `g f`, `g c`, `g w`, `g l` switch the view; `j` and `k` move; `Enter` opens; `/` goes to the search; `Esc` closes;
+Keys: `g h`, `g f`, `g c`, `g w`, `g s`, `g l` switch the view; `j` and `k` move; `Enter` opens; `/` goes to the search; `Esc` closes;
 `Ctrl+K` opens the palette (actions and rules in one box). The single keys can be switched off in the Help menu.
 Back and Forward of the browser walk through the views and the rules you opened. Language (English, German) and colours (as the system, light, dark) are in the menus; both are remembered in the browser.
 

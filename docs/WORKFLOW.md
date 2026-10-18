@@ -91,6 +91,14 @@ reason and, usually, a last day. **Renew …** gives a new last day or none; **R
 engine writes the file as a whole with the keys sorted, so an untouched entry may move; a change made to the file by someone
 else meanwhile is a clash and nothing is written.
 
+## 5c. Data classes (`g s`)
+
+The view lists the keys of `sources.json` with their class and the number of files each one holds, the class of a file no key
+names, and the files that have no class at all. Pick another class in a row, **Take away** a key, or add a key with a class
+(the name is the start of the source of the rule set; the files offer it). The hub writes the file in the config folder and
+the classes hold at once, also for what is written. If the change would **release more** than before, the page asks first
+(*Yes, release more* / *No*); tightening needs no question.
+
 ## 6. Back and Forward
 
 Each view, and each rule you open, is an entry of the history of the tab. **Back** and **Forward** of the browser (or
@@ -109,7 +117,7 @@ Rescan** does it on demand. A rule that is open and disappears is closed with a 
 ## 8. What is shown as what
 
 A rule set without an entry in `sources.json` is shown as **not classified**, and nothing unclassified or private is
-released for anything that leaves the hub. Set the classes per device before you rely on that.
+released for anything that leaves the hub. Set the classes per device (view `g s`, section 5c) before you rely on that.
 
 ## 9. Stop
 

@@ -221,6 +221,10 @@ for (const scheme of ['light', 'dark'] as const) {
     await view(page, 'Waivers');
     await expect(page.getByText('No waiver in this project.')).toBeVisible();
     await expectAccessible(page, `waivers ${scheme}`);
+    await page.keyboard.press('g');
+    await page.keyboard.press('s');
+    await expect(page.getByRole('table', { name: 'Classes' })).toBeVisible();
+    await expectAccessible(page, `sources ${scheme}`);
     await view(page, 'Rules');
     await expect(page.locator('tr#rule-AA-01')).toBeVisible();
     await expectAccessible(page, `rules ${scheme}`);
@@ -517,4 +521,47 @@ test('a waiver is made, renewed, taken back and removed in the project of the de
   await row.getByRole('button', { name: 'Remove' }).click();
   await expect(page.getByText('No waiver in this project.')).toBeVisible();
   expect(readFileSync(file, 'utf8')).toBe('{}\n');
+});
+
+test('a class is set, a change that releases more is asked first, and only sources.json moves', async ({ page }) => {
+  await pair(page);
+  const file = join(state().config, 'sources.json');
+  const keys = (): Record<string, { class: string }> =>
+    (JSON.parse(readFileSync(file, 'utf8')) as { sources: Record<string, { class: string }> }).sources;
+  await page.keyboard.press('g');
+  await page.keyboard.press('s');
+  await expect(page.getByRole('table', { name: 'Classes' })).toBeVisible();
+
+  // Adding a key that holds something back needs no question.
+  await page.getByLabel('Rule set (name as it starts the source, e.g. gamma)', { exact: true }).fill('delta');
+  await page.locator('form.add select').selectOption('private');
+  await page.getByRole('button', { name: 'Set a class', exact: true }).click();
+  await expect(page.getByRole('row', { name: /^delta / })).toBeVisible();
+  expect(keys()['delta']).toEqual({ class: 'private' });
+  expect(keys()['alpha']).toEqual({ class: 'public' });
+
+  // Releasing more is asked first; "No" writes nothing.
+  const select = page.getByLabel('delta: Class', { exact: true });
+  await select.selectOption('public');
+  const ask = page.getByRole('alertdialog');
+  await expect(ask).toBeVisible();
+  expect(keys()['delta']).toEqual({ class: 'private' });
+  await ask.getByRole('button', { name: 'No', exact: true }).click();
+  await expect(ask).toHaveCount(0);
+  expect(keys()['delta']).toEqual({ class: 'private' });
+
+  // "Yes" sends it again with the word of the person.
+  await select.selectOption('public');
+  await ask.getByRole('button', { name: 'Yes, release more', exact: true }).click();
+  await expect(ask).toHaveCount(0);
+  await expect.poll(() => keys()['delta']).toEqual({ class: 'public' });
+
+  // Take the key away again (asked first if that releases more).
+  await page.getByRole('row', { name: /^delta / }).getByRole('button', { name: 'Take away' }).click();
+  if (await ask.isVisible()) await ask.getByRole('button', { name: 'Yes, release more', exact: true }).click();
+  await expect.poll(() => keys()['delta']).toBeUndefined();
+  // The hub answers 409 to a change that releases more (that is what makes the page ask), and Chrome reports it as a
+  // finding of the console: those are expected here, nothing else is.
+  const seen = consoleProblems.get(page) ?? [];
+  seen.splice(0, seen.length, ...seen.filter((m) => !m.includes('409')));
 });
