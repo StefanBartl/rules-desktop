@@ -11,6 +11,7 @@
   import Families from './views/Families.svelte';
   import Overview from './views/Overview.svelte';
   import ConflictCenter from './views/ConflictCenter.svelte';
+  import Coverage from './views/Coverage.svelte';
   import NewRule from './views/NewRule.svelte';
   import Palette from './views/Palette.svelte';
   import Rules from './views/Rules.svelte';
@@ -167,6 +168,8 @@
           <Overview {app} />
         {:else if app.view === 'families'}
           <Families {app} />
+        {:else if app.view === 'coverage'}
+          <Coverage {app} />
         {:else}
           <Rules {app} />
         {/if}

@@ -119,6 +119,17 @@ const en = {
   'move.target': 'Rule (id)',
   'move.confirm': 'Move',
   'move.hint': 'Moves the rule within the document that holds it. The file of the rule is not touched.',
+  'nav.coverage': 'Coverage',
+  'coverage.hint': 'Which rule applies how: a check that runs by itself, only a question for an agent, or manual. The checks are run elsewhere (docmap-desktop), not here.',
+  'coverage.families': 'By family',
+  'coverage.gates': 'By gate',
+  'coverage.no_gates': 'No gate is configured.',
+  'coverage.name': 'Name',
+  'coverage.total': 'Rules',
+  'coverage.check': 'With a check',
+  'coverage.agent': 'Agent only',
+  'coverage.manual': 'Manual',
+  'coverage.unknown': 'Families without a rule',
   'write.saved': 'Saved.',
   'write.saved_many': '{n} rules saved.',
   'write.undo': 'Undo',
@@ -181,7 +192,7 @@ const en = {
   'detail.copy_failed': 'The clipboard is not available.',
   'palette.label': 'Command or rule',
   'palette.action': 'Action',
-  'help.keys': 'Keys: g h / g f / g l views, j k move, Enter open, / search, Esc close, Ctrl+K palette',  'notice.pair_rate_limited': 'The hub refused too many pairing attempts. Wait a minute, then ask the hub for a new link.',
+  'help.keys': 'Keys: g h / g f / g l / g c views, j k move, Enter open, / search, Esc close, Ctrl+K palette',  'notice.pair_rate_limited': 'The hub refused too many pairing attempts. Wait a minute, then ask the hub for a new link.',
 };
 
 export type Key = keyof typeof en;
@@ -299,6 +310,17 @@ const de: Record<Key, string> = {
   'move.target': 'Regel (ID)',
   'move.confirm': 'Verschieben',
   'move.hint': 'Verschiebt die Regel im Dokument, das sie enthält. Die Datei der Regel wird nicht angefasst.',
+  'nav.coverage': 'Abdeckung',
+  'coverage.hint': 'Welche Regel gilt wie: ein Check, der von selbst läuft, nur eine Frage an einen Agenten, oder manuell. Die Checks laufen woanders (docmap-desktop), nicht hier.',
+  'coverage.families': 'Nach Familie',
+  'coverage.gates': 'Nach Gate',
+  'coverage.no_gates': 'Es ist kein Gate eingerichtet.',
+  'coverage.name': 'Name',
+  'coverage.total': 'Regeln',
+  'coverage.check': 'Mit Check',
+  'coverage.agent': 'Nur Agent',
+  'coverage.manual': 'Manuell',
+  'coverage.unknown': 'Familien ohne Regel',
   'write.saved': 'Gespeichert.',
   'write.saved_many': '{n} Regeln gespeichert.',
   'write.undo': 'Rückgängig',
@@ -361,7 +383,7 @@ const de: Record<Key, string> = {
   'detail.copy_failed': 'Die Zwischenablage ist nicht verfügbar.',
   'palette.label': 'Befehl oder Regel',
   'palette.action': 'Aktion',
-  'help.keys': 'Tasten: g h / g f / g l Ansichten, j k bewegen, Enter öffnen, / Suche, Esc schließen, Strg+K Palette',  'notice.pair_rate_limited': 'Der Hub hat zu viele Kopplungsversuche abgewiesen. Eine Minute warten, dann einen neuen Link vom Hub holen.',
+  'help.keys': 'Tasten: g h / g f / g l / g c Ansichten, j k bewegen, Enter öffnen, / Suche, Esc schließen, Strg+K Palette',  'notice.pair_rate_limited': 'Der Hub hat zu viele Kopplungsversuche abgewiesen. Eine Minute warten, dann einen neuen Link vom Hub holen.',
 };
 
 export const dictionaries: Record<Lang, Record<Key, string>> = { en, de };

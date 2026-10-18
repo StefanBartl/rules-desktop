@@ -29,6 +29,12 @@ The page does not run any check. That is for [docmap-desktop](https://github.com
 
 One row per family with its counters. A row opens the list **narrowed to that family**.
 
+## 3a. See how the rules apply (`g c`)
+
+Coverage counts, per family and per gate, the rules with a check that runs by itself, those with only a question for an
+agent, and the manual ones. A gate is a list of families in the configuration; its row sums the rules of those families
+and names the families that match no rule. A row opens the list. The page runs no check: that is for docmap-desktop.
+
 ## 4. Find a rule (`g l`)
 
 - Filter by family, severity and kind of check (a rule without a check is its own entry).

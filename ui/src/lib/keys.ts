@@ -29,7 +29,7 @@ export type ChordState = number | null;
 /** A `g` that nothing follows within this is forgotten (as in tasks-desktop). */
 export const CHORD_MS = 1500;
 
-const CHORD: Readonly<Record<string, View>> = { h: 'overview', f: 'families', l: 'rules' };
+const CHORD: Readonly<Record<string, View>> = { h: 'overview', f: 'families', l: 'rules', c: 'coverage' };
 
 const MODIFIERS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'AltGraph']);
 

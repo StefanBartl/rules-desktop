@@ -34,7 +34,7 @@ async function pair(page: Page): Promise<void> {
   await expect(page.getByRole('status').filter({ hasText: 'live' })).toBeVisible();
 }
 
-async function view(page: Page, name: 'Overview' | 'Families' | 'Rules'): Promise<void> {
+async function view(page: Page, name: 'Overview' | 'Families' | 'Rules' | 'Coverage'): Promise<void> {
   await page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
 }
 
@@ -215,6 +215,9 @@ for (const scheme of ['light', 'dark'] as const) {
     await expectAccessible(page, `overview ${scheme}`);
     await view(page, 'Families');
     await expectAccessible(page, `families ${scheme}`);
+    await view(page, 'Coverage');
+    await expect(page.getByRole('table', { name: 'By family' })).toBeVisible();
+    await expectAccessible(page, `coverage ${scheme}`);
     await view(page, 'Rules');
     await expect(page.locator('tr#rule-AA-01')).toBeVisible();
     await expectAccessible(page, `rules ${scheme}`);
@@ -455,4 +458,22 @@ test('a change that met another version is not written until the person chooses,
   await expect(center).toHaveCount(0);
   await expect.poll(() => readFileSync(file, 'utf8')).toContain('severity: nice-to-have');
   expect(readFileSync(file, 'utf8')).toContain('changed elsewhere');
+});
+
+test('the coverage shows how the rules apply per family, and a row opens the list of its family', async ({ page }) => {
+  await pair(page);
+  await page.keyboard.press('g');
+  await page.keyboard.press('c');
+  await expect(page.getByRole('heading', { name: 'Coverage' })).toBeVisible();
+  const table = page.getByRole('table', { name: 'By family' });
+  // The sums of the row are the rules of the family: a check, only an agent, or manual.
+  const row = table.getByRole('row', { name: /^BB / });
+  await expect(row).toBeVisible();
+  const cells = (await row.getByRole('cell').allInnerTexts()).map((c) => parseInt(c, 10));
+  const [total, check, agent, manual] = cells as [number, number, number, number];
+  expect(check + agent + manual).toBe(total);
+  expect(total).toBeGreaterThan(0);
+  await table.getByRole('button', { name: 'BB', exact: true }).click();
+  await expect(page.locator('tr#rule-BB-01')).toBeVisible();
+  await expect(page.locator('tr#rule-AA-01')).toHaveCount(0);
 });

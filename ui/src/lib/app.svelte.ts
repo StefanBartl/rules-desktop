@@ -18,10 +18,10 @@ import { clientOpId, nextOf, retireOp, setOp, summarize, type Conflict, type Op,
 
 export type Phase = 'starting' | 'needs_pairing' | 'offline' | 'unavailable' | 'ready';
 export type Connection = 'live' | 'reconnecting' | 'offline';
-export type View = 'overview' | 'families' | 'rules';
+export type View = 'overview' | 'families' | 'rules' | 'coverage';
 export type Theme = 'auto' | 'light' | 'dark';
 
-export const VIEWS: readonly View[] = ['overview', 'families', 'rules'];
+export const VIEWS: readonly View[] = ['overview', 'families', 'rules', 'coverage'];
 
 /**
  * A place the person can go back to: the view and the rule that is open in it. Filters, the search and the cursor are

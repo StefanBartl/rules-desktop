@@ -58,6 +58,7 @@ comment at the top of `crates/rules-hub/src/sources.rs`.
 | --- | --- |
 | Overview | Counters, the split by severity, and the findings: what the engine could not load, gate families that have no rule, files without a class, retired rules. |
 | Families | One row per family with its counters; a row opens the list narrowed to it. |
+| Coverage | Per family and per gate: how many rules have a check that runs by itself, only a question for an agent, or are manual. A row opens the list of its family (a gate, of its families). |
 | Rules | The list, with filters for family, severity and kind of check, and a search over titles and, once the hub has read them, over the texts. |
 
 A rule opens beside the list: its text as text, its file and line (copy, or **Open in Neovim**, which starts an editor on
@@ -65,7 +66,7 @@ the machine the hub runs on), the version of its file, and its check and agent q
 run. The page follows the rule files: when one changes on disk, the list changes by itself, and a window that gets the
 focus back asks for a scan.
 
-Keys: `g h`, `g f`, `g l` switch the view; `j` and `k` move; `Enter` opens; `/` goes to the search; `Esc` closes;
+Keys: `g h`, `g f`, `g c`, `g l` switch the view; `j` and `k` move; `Enter` opens; `/` goes to the search; `Esc` closes;
 `Ctrl+K` opens the palette (actions and rules in one box). The single keys can be switched off in the Help menu.
 Back and Forward of the browser walk through the views and the rules you opened. Language (English, German) and colours (as the system, light, dark) are in the menus; both are remembered in the browser.
 

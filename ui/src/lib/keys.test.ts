@@ -17,6 +17,10 @@ function run(keys: [string, number, Partial<KeyPress>?][], shortcuts = true): (s
 }
 
 describe('the keys of the page', () => {
+  it('go to the coverage with g c', () => {
+    expect(run([['g', 0], ['c', 10]])).toEqual([null, 'view:coverage']);
+  });
+
   it('go to a view with g and a letter', () => {
     expect(run([['g', 0], ['h', 10], ['g', 20], ['f', 30], ['g', 40], ['l', 50]])).toEqual([
       null,
