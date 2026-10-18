@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { expectAccessible, violations, watchViolations } from './a11y';
@@ -265,4 +265,36 @@ test('a window that gets the focus back asks the hub for a scan, at most every f
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await page.waitForTimeout(500);
   expect(rescans.length).toBe(before + 1);
+});
+
+test('Back is never trapped by a rule that is gone: the entry of an open rule that vanished is replaced', async ({ page }) => {
+  await pair(page);
+  await view(page, 'Rules');
+  await page.waitForTimeout(2300);
+  const file = join(state().vault, 'rulesets', 'alpha', 'regeln', 'gone.md');
+  writeFileSync(
+    file,
+    '# Gone\n\n#### `GN-01` - Written to be removed\n\n```rule\nid = "GN-01",\nseverity = "critical",\n```\n\nA short-lived rule.\n',
+  );
+  await expect(page.locator('tr#rule-GN-01')).toBeVisible({ timeout: 20_000 });
+  await page.locator('tr#rule-GN-01').getByRole('button').click();
+  const detail = page.getByRole('complementary', { name: 'Rule' });
+  await expect(detail.getByRole('heading', { name: 'GN-01' })).toBeVisible();
+  // The file goes while its rule is open: the page closes it by itself, with a word.
+  rmSync(file);
+  await expect(detail).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.locator('tr#rule-GN-01')).toHaveCount(0);
+  // Back walks on to the place before, however often the page is asked: it is not held at the rule that is
+  // gone (before, each visit of its entry made a new entry after it, and Back never got past it).
+  const overview = page.getByRole('heading', { name: 'Overview' });
+  for (let i = 0; i < 4 && !(await overview.isVisible()); i++) {
+    await page.goBack();
+    await page.waitForTimeout(1500);
+  }
+  await expect(overview).toBeVisible();
+  // The hub answers 404 for the rule that is gone (that is what closes it), and Chrome reports a 404 as a finding
+  // of the console: that one is expected here, nothing else is.
+  const seen = consoleProblems.get(page) ?? [];
+  const rest = seen.filter((m) => !m.includes('404'));
+  seen.splice(0, seen.length, ...rest);
 });

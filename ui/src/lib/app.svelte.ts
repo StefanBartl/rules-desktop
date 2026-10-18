@@ -463,6 +463,9 @@ export class App {
 
   /** The hub does not hold the open rule any more: the detail closes with a word why. */
   private closeGone(id: string): void {
+    // The page left the place by itself: the history entry of that rule is replaced, not followed by a new one
+    // (Back would lead to the entry of a rule that is gone and the page would leave it again at once).
+    this.navReplace = true;
     this.detail = { state: 'none' };
     if (this.selectedId === id) this.selectedId = null;
     this.notice = { key: 'detail.gone', params: { id } };
@@ -568,6 +571,16 @@ export class App {
   closeDetail(): void {
     this.detailAbort?.abort();
     this.detail = { state: 'none' };
+  }
+
+  /** Set when the page left a place by itself; `takeNavReplace` reads it once. */
+  private navReplace = false;
+
+  /** Is the change of place that is recorded next one the page made by itself (a replaced entry)? Reads once. */
+  takeNavReplace(): boolean {
+    const replace = this.navReplace;
+    this.navReplace = false;
+    return replace;
   }
 
   /** The place the page is at now, for the history of the tab. */

@@ -37,7 +37,7 @@
   $effect(() => () => nav.stop());
   $effect(() => {
     // Only a page that shows something has a place: a pairing page or an offline page has none to go back to.
-    if (app.phase === 'ready') nav.record(app.navState());
+    if (app.phase === 'ready') nav.record(app.navState(), { replace: app.takeNavReplace() });
   });
 
   // The language and the theme of the document follow the state.

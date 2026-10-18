@@ -468,6 +468,17 @@ describe('the places of the history', () => {
     expect(s.app.view).toBe('rules');
   });
 
+  it('says once that a rule which is gone was left by the page itself, so its entry is replaced', async () => {
+    const s = await ready();
+    expect(s.app.takeNavReplace()).toBe(false);
+    await s.app.openDetail('DEP-01');
+    s.fake.dropRule('DEP-01');
+    await s.app.onMessage({ event: 'rules', data: JSON.stringify({ changed_ids: [], removed: ['DEP-01'] }) });
+    expect(s.app.detail.state).toBe('none');
+    expect(s.app.takeNavReplace()).toBe(true);
+    expect(s.app.takeNavReplace()).toBe(false);
+  });
+
   it('takes only what the app wrote: a known view and an id of a sane length', () => {
     expect(isNavState({ view: 'rules', id: 'DEP-01' })).toBe(true);
     expect(isNavState({ view: 'overview', id: null })).toBe(true);
