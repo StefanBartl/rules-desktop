@@ -21,6 +21,7 @@ pub mod editor;
 pub mod engine;
 mod live;
 pub mod locate;
+pub mod policy;
 mod routes;
 mod runtime;
 pub mod settings;
@@ -112,6 +113,9 @@ pub struct Start {
     /// The project whose `.rules-waivers.json` the waivers are kept in (the person's word about this device);
     /// `None`: the waiver routes say there is none. The page never names a folder.
     pub project: Option<std::path::PathBuf>,
+    /// The config folder, where `sources.json` is kept and, when the person changes a class on the page, written; `None`:
+    /// the hub keeps no such file and says so.
+    pub config_dir: Option<std::path::PathBuf>,
     /// The files of the page; [`ui::UiFiles::none`] serves the placeholder page of the core.
     pub ui: ui::UiFiles,
 }
@@ -138,7 +142,8 @@ pub async fn start(s: Start) -> std::io::Result<RunningServer> {
             guard_rules: GuardRules::new(IDENTITY.route("hello"), [IDENTITY.route("ops")]),
             ui: Arc::new(s.ui),
             runtime: RulesRuntime::new(s.engine, s.status, s.sources, max_age, s.watch, s.editor)
-                .with_project(s.project),
+                .with_project(s.project)
+                .with_config_dir(s.config_dir),
             // There is one vault and no list to choose from, so this is never called.
             build: Arc::new(move |()| {
                 RulesRuntime::new(

@@ -44,6 +44,7 @@ pub const ROUTES: &[(&str, MakeRoute)] = &[
     ("next_id", || get(crate::write::next_id)),
     ("ops", || post(crate::write::ops)),
     ("waivers", || get(crate::write::waivers)),
+    ("sources/class", || post(crate::policy::set_class)),
 ];
 
 /// The router of the app, built from [`ROUTES`] and from nothing else. Invariant: this stays a
@@ -359,8 +360,18 @@ mod tests {
         assert_eq!(
             names,
             [
-                "snapshot", "rule", "sources", "about", "events", "search", "rescan", "open",
-                "next_id", "ops", "waivers"
+                "snapshot",
+                "rule",
+                "sources",
+                "about",
+                "events",
+                "search",
+                "rescan",
+                "open",
+                "next_id",
+                "ops",
+                "waivers",
+                "sources/class"
             ]
         );
     }

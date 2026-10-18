@@ -174,7 +174,7 @@ async fn start_limited(
     watch: Option<Watch>,
     editor: Option<rules_hub::Editor>,
 ) -> Hub {
-    start_all(engine, limits, sources, watch, editor, None).await
+    start_all(engine, limits, sources, watch, editor, None, None).await
 }
 
 async fn start_all(
@@ -184,6 +184,7 @@ async fn start_all(
     watch: Option<Watch>,
     editor: Option<rules_hub::Editor>,
     project: Option<std::path::PathBuf>,
+    config_dir: Option<std::path::PathBuf>,
 ) -> Hub {
     let control = Secret::generate(TOKEN_BYTES).unwrap();
     let server = rules_hub::start(rules_hub::Start {
@@ -208,6 +209,7 @@ async fn start_all(
         editor,
         ui: rules_hub::ui::UiFiles::none(),
         project,
+        config_dir,
     })
     .await
     .expect("the hub starts");
@@ -239,7 +241,10 @@ async fn every_route_of_the_table_is_served_to_a_session_and_to_nobody_else() {
         let without = get(&hub.server, &route(name), None).await;
         assert_eq!(without.status, 401, "{name}: {without:?}");
         // The stream does not end and the rescan is a POST: both are tried on their own below.
-        if matches!(*name, "events" | "rescan" | "open" | "ops") {
+        if matches!(
+            *name,
+            "events" | "rescan" | "open" | "ops" | "sources/class"
+        ) {
             continue;
         }
         let with = hub.get(&route(name)).await;
@@ -920,6 +925,7 @@ async fn the_page_of_a_folder_is_served_to_everybody_and_nothing_else_of_it() {
         editor: None,
         ui: rules_hub::ui::UiFiles::load(&dir).unwrap(),
         project: None,
+        config_dir: None,
     })
     .await
     .unwrap();
@@ -1464,6 +1470,7 @@ async fn start_with_project(engine: &Arc<FakeEngine>, project: Option<&std::path
         None,
         None,
         project.map(std::path::Path::to_path_buf),
+        None,
     )
     .await
 }
@@ -1528,4 +1535,158 @@ async fn a_waiver_operation_goes_with_the_project_of_the_device_and_never_with_o
     let r = bare.ops(&waive_body()).await;
     assert_eq!(r.status, 409, "{r:?}");
     assert_eq!(r.json()["error"]["code"], "no_project");
+}
+
+// ── the data classes the page may change ────────────────────────────────────────
+
+fn temp_config(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "rules-desktop-policy-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+async fn start_with_config(
+    engine: &Arc<FakeEngine>,
+    policy: SourcePolicy,
+    dir: Option<&std::path::Path>,
+) -> Hub {
+    start_all(
+        Some(Arc::clone(engine)),
+        Limits::default(),
+        Arc::new(policy),
+        None,
+        None,
+        None,
+        dir.map(std::path::Path::to_path_buf),
+    )
+    .await
+}
+
+impl Hub {
+    async fn set_class(&self, body: Value) -> appkit_testkit::wire::Reply {
+        post(
+            &self.server,
+            &route("sources/class"),
+            Some(&self.token),
+            &body.to_string(),
+        )
+        .await
+    }
+}
+
+#[tokio::test]
+async fn without_a_config_folder_the_classes_cannot_be_changed_and_without_a_session_nobody_can() {
+    let engine = FakeEngine::new();
+    let hub = start_with_config(&engine, SourcePolicy::default(), None).await;
+    let r = hub
+        .set_class(json!({ "key": "Checklists", "class": "private" }))
+        .await;
+    assert_eq!(r.status, 409, "{r:?}");
+    assert_eq!(r.json()["error"]["code"], "not_configurable");
+    let anonymous = post(&hub.server, &route("sources/class"), None, "{}").await;
+    assert_eq!(anonymous.status, 401, "{anonymous:?}");
+}
+
+#[tokio::test]
+async fn a_class_that_holds_back_more_is_written_and_in_force_at_once() {
+    let engine = FakeEngine::new();
+    let dir = temp_config("tighten");
+    let policy = SourcePolicy::new([("Checklists".to_owned(), Class::Internal)]).unwrap();
+    let hub = start_with_config(&engine, policy, Some(&dir)).await;
+
+    let r = hub
+        .set_class(json!({ "key": "Checklists", "class": "private" }))
+        .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("sources.json")).unwrap(),
+        "{\n  \"schema\": 1,\n  \"sources\": {\n    \"Checklists\": {\n      \"class\": \"private\"\n    }\n  }\n}\n"
+    );
+    // The answer of `sources` is the new policy's: the held snapshot did not keep the old one.
+    let sources = hub.get(&route("sources")).await.json();
+    assert_eq!(sources["keys"][0]["class"], "private", "{sources}");
+    assert_eq!(sources["private"].as_array().map(Vec::len), Some(3));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_class_that_releases_more_needs_the_word_of_the_person_and_a_bad_change_writes_nothing() {
+    let engine = FakeEngine::new();
+    let dir = temp_config("loosen");
+    let policy = SourcePolicy::new([("Checklists".to_owned(), Class::Private)]).unwrap();
+    let hub = start_with_config(&engine, policy, Some(&dir)).await;
+    let file = dir.join("sources.json");
+
+    // Private to public releases the rule set: refused until the request says it is meant.
+    let loosen = json!({ "key": "Checklists", "class": "public" });
+    let r = hub.set_class(loosen.clone()).await;
+    assert_eq!(r.status, 409, "{r:?}");
+    assert_eq!(r.json()["error"]["code"], "confirm_needed");
+    assert!(!file.exists(), "nothing was written");
+    let sources = hub.get(&route("sources")).await.json();
+    assert_eq!(
+        sources["keys"][0]["class"], "private",
+        "and nothing changed in force"
+    );
+
+    let mut meant = loosen;
+    meant["confirm_loosen"] = json!(true);
+    assert_eq!(hub.set_class(meant).await.status, 200);
+    assert!(std::fs::read_to_string(&file)
+        .unwrap()
+        .contains("\"public\""));
+
+    // What is not a change: a field it does not know, a bad key or class, both targets or none.
+    for (name, body) in [
+        (
+            "an unknown field",
+            json!({ "key": "a", "class": "public", "path": "C:/x" }),
+        ),
+        (
+            "a class that is none",
+            json!({ "key": "a", "class": "secret" }),
+        ),
+        (
+            "a bad key",
+            json!({ "key": "a b", "class": "public", "confirm_loosen": true }),
+        ),
+        (
+            "both targets",
+            json!({ "key": "a", "default": true, "class": "private" }),
+        ),
+        ("no target", json!({ "class": "private" })),
+    ] {
+        let before = std::fs::read_to_string(&file).unwrap();
+        let r = hub.set_class(body).await;
+        assert_eq!(r.status, 400, "{name}: {r:?}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before, "{name}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_rule_set_that_gets_a_class_may_be_written_from_then_on() {
+    // The class decides whether the page writes (the check before the engine is asked works on the policy in force).
+    let engine = FakeEngine::new();
+    let dir = temp_config("write");
+    let hub = start_with_config(&engine, SourcePolicy::default(), Some(&dir)).await;
+    assert_eq!(hub.ops(&ops_body("set", true)).await.status, 403);
+    let r = hub
+        .set_class(json!({ "key": "Checklists", "class": "internal", "confirm_loosen": true }))
+        .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(hub.ops(&ops_body("set", true)).await.status, 200);
+    // And taking the key away closes it again (that holds back more: no word needed).
+    assert_eq!(
+        hub.set_class(json!({ "key": "Checklists", "class": null }))
+            .await
+            .status,
+        200
+    );
+    assert_eq!(hub.ops(&ops_body("set", true)).await.status, 403);
+    let _ = std::fs::remove_dir_all(&dir);
 }

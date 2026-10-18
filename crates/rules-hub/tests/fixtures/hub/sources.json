@@ -10,6 +10,7 @@
     { "key": "Checklists", "class": "internal", "files": 3 },
     { "key": "Checklists/_rules", "class": "private", "files": 1 }
   ],
+  "default": null,
   "unclassified": [],
   "private": ["Checklists/_rules/ERR/ERR-100.md"]
 }

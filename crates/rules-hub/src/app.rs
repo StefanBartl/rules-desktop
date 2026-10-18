@@ -244,6 +244,7 @@ pub async fn serve(opts: ServeOptions) -> Result<(), String> {
             }),
         ui: ui.clone(),
         project: project.clone(),
+        config_dir: Some(dir.clone()),
         watch: state.vault.clone().map(|vault| Watch {
             vault,
             refresh: RefreshOptions::default(),

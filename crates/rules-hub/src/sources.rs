@@ -249,6 +249,29 @@ impl<'a> Verdict<'a> {
     }
 }
 
+/// How much a class holds back: public releases the most, private and unclassified release nothing.
+fn rank(shown: Shown) -> u8 {
+    match shown {
+        Shown::Public => 0,
+        Shown::Internal => 1,
+        Shown::Private | Shown::Unclassified => 2,
+    }
+}
+
+/// Does `new` release more than `old` for what `source` names (a key, or a file)? Setting a class that is more open
+/// than the one in force, or taking away a key that held something back, is a loosening.
+#[must_use]
+pub fn loosens(old: &SourcePolicy, new: &SourcePolicy, source: &str) -> bool {
+    rank(new.shown(source)) < rank(old.shown(source))
+}
+
+/// Does the default of `new` release more than the default of `old` (none releases nothing)?
+#[must_use]
+pub fn loosens_default(old: &SourcePolicy, new: &SourcePolicy) -> bool {
+    let of = |p: &SourcePolicy| p.default.map_or(2, |c| rank(Shown::from(c)));
+    of(new) < of(old)
+}
+
 /// `text` is `prefix`, or starts with `prefix` and a `/`, without regard to ASCII case.
 fn is_under(text: &str, prefix: &str) -> bool {
     let (t, p) = (text.as_bytes(), prefix.as_bytes());
@@ -325,7 +348,12 @@ impl SourcePolicy {
                 format!("larger than {} KiB", MAX_FILE_BYTES / 1024),
             ));
         }
-        let parsed: File = serde_json::from_str(&text)
+        Self::parse(&text, file_path)
+    }
+
+    /// The policy a text of `sources.json` says; `file_path` only names the file in an error.
+    fn parse(text: &str, file_path: PathBuf) -> Result<Self, SourcesError> {
+        let parsed: File = serde_json::from_str(text)
             .map_err(|e| SourcesError::Invalid(file_path.clone(), e.to_string()))?;
         if parsed.schema != SCHEMA {
             return Err(SourcesError::Invalid(
@@ -336,6 +364,64 @@ impl SourcePolicy {
         Self::new(parsed.sources.0)
             .map(|p| p.with_default(parsed.default))
             .map_err(|why| SourcesError::Invalid(file_path, why))
+    }
+
+    /// The same policy with the class of `key` set, or the key taken away (`None`). The key is checked like any key
+    /// of the file.
+    ///
+    /// # Errors
+    ///
+    /// The reason the result is not acceptable (a bad key, too many keys).
+    pub fn with_key(&self, key: &str, class: Option<Class>) -> Result<Self, String> {
+        let mut keys: Vec<(String, Class)> = self
+            .keys
+            .iter()
+            .filter(|(k, _)| !k.eq_ignore_ascii_case(key))
+            .cloned()
+            .collect();
+        if let Some(class) = class {
+            keys.push((key.to_owned(), class));
+        }
+        Self::new(keys).map(|p| p.with_default(self.default))
+    }
+
+    /// The text of `sources.json` for this policy: sorted keys, two spaces, LF and a final newline.
+    #[must_use]
+    pub fn to_text(&self) -> String {
+        let sources: serde_json::Map<String, Value> = self
+            .keys
+            .iter()
+            .map(|(key, class)| (key.clone(), json!({ "class": class })))
+            .collect();
+        let mut doc = serde_json::Map::new();
+        doc.insert("schema".to_owned(), json!(SCHEMA));
+        if let Some(default) = self.default {
+            doc.insert("default".to_owned(), json!(default));
+        }
+        doc.insert("sources".to_owned(), Value::Object(sources));
+        let mut text = serde_json::to_string_pretty(&Value::Object(doc)).unwrap_or_default();
+        text.push('\n');
+        text
+    }
+
+    /// Write this policy as `sources.json` of the config folder: the text is read back with the rules of the file
+    /// before anything is replaced, and the file is replaced as a whole (a temporary file beside it, renamed over it).
+    ///
+    /// # Errors
+    ///
+    /// A short reason, without a path.
+    pub fn save(&self, dir: &Path) -> Result<(), String> {
+        let text = self.to_text();
+        let target = path(dir);
+        Self::parse(&text, target.clone())
+            .map_err(|_| "the policy does not read back".to_owned())?;
+        let temp = target.with_extension("json.tmp");
+        std::fs::write(&temp, text.as_bytes())
+            .map_err(|_| "the file could not be written".to_owned())?;
+        std::fs::rename(&temp, &target).map_err(|_| {
+            let _ = std::fs::remove_file(&temp);
+            "the file could not be replaced".to_owned()
+        })
     }
 
     /// The keys of the file with their classes, sorted.
@@ -471,6 +557,7 @@ impl SourcePolicy {
             "kind": "hub.sources",
             "files": out,
             "keys": keys,
+            "default": self.default,
             "unclassified": unclassified,
             "private": private,
         })

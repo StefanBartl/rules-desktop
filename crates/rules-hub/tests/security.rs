@@ -37,6 +37,7 @@ impl Subject for Rules {
             editor: None,
             ui: rules_hub::ui::UiFiles::none(),
             project: None,
+            config_dir: None,
         }))
     }
 

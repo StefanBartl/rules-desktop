@@ -312,7 +312,7 @@ pub(crate) async fn ops(State(st): State<Arc<Shared>>, body: Bytes) -> Response 
         Ok(r) => r,
         Err(refusal) => return error_body(refusal.status, refusal.code, &refusal.message),
     };
-    if let Err(refusal) = authorize(&rt.sources, &held, &request) {
+    if let Err(refusal) = authorize(&rt.policy(), &held, &request) {
         return error_body(refusal.status, refusal.code, &refusal.message);
     }
     let reply = match ask(&rt, Calls::Ops, Some(&request)).await {

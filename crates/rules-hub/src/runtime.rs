@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use appkit_hub::{HubStatus, Runtime};
@@ -28,7 +28,11 @@ pub struct RulesRuntime {
     pub(crate) engine: Option<Arc<dyn Engine>>,
     pub(crate) store: Arc<SnapshotStore>,
     /// The data classes of the rule sets on this device (`sources.json`).
-    pub(crate) sources: Arc<SourcePolicy>,
+    sources: RwLock<Arc<SourcePolicy>>,
+    /// Where `sources.json` is kept; none: the classes cannot be changed from the page.
+    pub(crate) config_dir: Option<PathBuf>,
+    /// One change of the classes at a time.
+    pub(crate) policy_edit: Mutex<()>,
     /// What was read of the held snapshot, with the text it was read from.
     held: Mutex<Option<(Bytes, Arc<Held>)>>,
     /// The text of the rules, for the search; with the engine only.
@@ -163,6 +167,35 @@ struct RuleId {
 }
 
 impl RulesRuntime {
+    /// The folder `sources.json` is kept in.
+    #[must_use]
+    pub(crate) fn with_config_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.config_dir = dir;
+        self
+    }
+
+    /// The data classes in force now.
+    pub(crate) fn policy(&self) -> Arc<SourcePolicy> {
+        Arc::clone(
+            &self
+                .sources
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// Put a new policy in force. What was worked out of the held snapshot with the old one is dropped.
+    pub(crate) fn set_policy(&self, policy: Arc<SourcePolicy>) {
+        *self
+            .sources
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = policy;
+        *self
+            .held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
     /// The project of the waivers.
     #[must_use]
     pub(crate) fn with_project(mut self, project: Option<PathBuf>) -> Self {
@@ -216,7 +249,9 @@ impl RulesRuntime {
             status,
             engine,
             store,
-            sources,
+            sources: RwLock::new(sources),
+            config_dir: None,
+            policy_edit: Mutex::new(()),
             held: Mutex::new(None),
             search,
             streams: Arc::default(),
@@ -257,12 +292,13 @@ impl RulesRuntime {
     }
 
     /// The answer of the `sources` route for a held snapshot; `None` when its files are not known.
-    /// The policy does not change while the hub runs, so it is computed once for each snapshot.
+    /// The policy changes only when the person changes it (which drops the held snapshot), so it is computed once for
+    /// each snapshot.
     pub(crate) fn sources_body(&self, held: &Held) -> Option<Bytes> {
         let files = held.files.as_ref()?;
         Some(
             held.sources_body
-                .get_or_init(|| Bytes::from(self.sources.document(files).to_string()))
+                .get_or_init(|| Bytes::from(self.policy().document(files).to_string()))
                 .clone(),
         )
     }
