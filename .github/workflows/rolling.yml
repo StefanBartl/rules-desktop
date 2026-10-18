@@ -26,14 +26,16 @@ on:
     types: [completed]
     branches: [main]
 
-# One build at a time, and a running build is never cancelled: the pre-release must end on the newest commit. A
-# build that is cancelled by a later run left the page on an old commit when that later run was the CI of an OLDER
-# commit that finished late (it builds nothing, `prepare` finds it is not the tip of main, but it had cancelled the
-# build of the tip). A run that finds its commit is no longer the tip of main stops in `prepare`, so a waiting run
-# costs seconds. The runs that do nothing (a failed CI, a pull request) have a group of their own.
+# Only the run of the TIP of main may build, and a newer tip replaces a build that is still running: the
+# pre-release must end on the newest commit. The group tells the two kinds of run apart before any step runs:
+# for a `workflow_run` event `github.sha` is the tip of main when the run started, `head_sha` is the commit the
+# CI run was about. A CI run of an OLDER commit that finishes late is not the tip: it lands in a group of its own
+# (it builds nothing, `prepare` says so), so it can neither cancel the build of the tip nor push the waiting
+# build of the tip out of the queue (a waiting run is replaced by a newer one of the SAME group, even without
+# `cancel-in-progress`). The runs that do nothing (a failed CI, a pull request) share that group too.
 concurrency:
-  group: rolling-${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
-  cancel-in-progress: false
+  group: rolling-${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
