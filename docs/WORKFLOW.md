@@ -1,9 +1,9 @@
 # Working with rules-desktop
 
 A walk through one sitting, from the start of the hub to the last rule you looked at. What each setting and variable
-means is in [USAGE.md](USAGE.md); what the hub does about security is in [SECURITY.md](SECURITY.md). The page only
-**reads** the rule set. Rules are written in Neovim (`:Rules new`, `set`, `retire`, `move`) or by hand in the vault; the
-page follows the files and shows the change by itself.
+means is in [USAGE.md](USAGE.md); what the hub does about security is in [SECURITY.md](SECURITY.md). The page reads the rule
+set and changes a rule through the engine (see section 5a); new rules are made in Neovim (`:Rules new`) or by hand in the
+vault for now. The page follows the files and shows every change by itself.
 
 ## 1. Start
 
@@ -45,6 +45,18 @@ and its check and agent question as data. Hidden or reversing characters are sho
 - **Open in Neovim** starts an editor on the machine the hub runs on, at the line. The hub asks the engine where the
   file is and refuses a file that lies outside the rule set the engine names.
 - `Esc` closes the rule.
+
+## 5a. Change a rule
+
+For a rule that is a file of its own (one file per rule) in a rule set that has a class on this device, the open rule
+has an **Edit** button: severity, title (one line), text and, when the check is data, check and agent as JSON (empty
+takes it away). **Save** sends only what changed, with the version of the file you saw; the engine reads the result back
+before it writes, and only those lines of the file move. A line that says *Saved.* offers **Undo**, which sends the
+engine's own way back. If someone changed the file since you opened the rule, nothing is written and you are told so.
+
+**Retire …** in the editor takes the rule out of the rule set (its id stays taken); the **Retired rules** list on the
+overview has **Reinstate**. A rule in a document with many rules, one whose rule set has no class, and the check of a rule
+whose check is a Lua function are shown and not written: the page says why.
 
 ## 6. Back and Forward
 

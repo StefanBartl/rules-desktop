@@ -771,7 +771,10 @@ export class App {
   private async afterWrite(changed: readonly string[]): Promise<void> {
     await this.refresh();
     const open = this.detail.state === 'none' ? null : this.detail.id;
-    if (open !== null && changed.includes(open)) await this.loadDetail(open);
+    if (open === null || !changed.includes(open)) return;
+    // A rule that left the rule set (retired) is not asked for: the hub would answer 404. Its detail just closes.
+    if (this.rules.some((r) => r.id === open)) await this.loadDetail(open);
+    else this.closeDetail();
   }
 
   /** Take back what the notice reports: its operations go as a request of their own, with no Undo for the undo. */

@@ -587,6 +587,26 @@ describe('writing', () => {
     expect(cold.fake.opsRequests).toHaveLength(0);
   });
 
+  it('closes the detail of a rule that was retired without asking the hub for it again', async () => {
+    const s = await ready();
+    await s.app.openDetail('DEP-01');
+    s.fake.opsAnswer = () => {
+      const doc = JSON.parse(s.fake.snapshotText) as { rules: { id: string }[] };
+      doc.rules = doc.rules.filter((r) => r.id !== 'DEP-01');
+      s.fake.snapshotText = JSON.stringify(doc);
+      s.fake.etag = 'sha256:next';
+      return {
+        status: 200,
+        body: { kind: 'rules.result', dry_run: false, ok: true, results: [{ n: 1, ok: true, op: 'retire', id: 'DEP-01', changed_ids: ['DEP-01'] }] },
+      };
+    };
+    const asked = s.fake.count('/api/rules/rule');
+    await s.app.write([{ op: 'retire', id: 'DEP-01', if_match: 'sha256:5e6671e2dabdab83' }]);
+    expect(s.app.detail.state).toBe('none');
+    expect(s.fake.count('/api/rules/rule')).toBe(asked);
+    expect(s.app.notice).toMatchObject({ key: 'write.saved' });
+  });
+
   it('reads the tag of a rule from the snapshot', async () => {
     const s = await ready();
     expect(s.app.etagOf('DEP-01')).toBe('sha256:5e6671e2dabdab83');

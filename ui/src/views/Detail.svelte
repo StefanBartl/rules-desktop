@@ -6,6 +6,7 @@
   import { labelOf, translate, type Key } from '../lib/i18n';
   import { asJson, holdsHidden, shownText, sourceLine, titleText } from '../lib/ruletext';
   import { classLabel } from '../lib/sources';
+  import RuleEditor from './RuleEditor.svelte';
 
   let { app }: { app: App } = $props();
   const t = (key: Key, params: Record<string, string | number> = {}) => translate(app.lang, key, params);
@@ -20,6 +21,13 @@
       copied = 'failed';
     }
   }
+  // The editor is open for one rule; another rule starts without it.
+  let editing = $state(false);
+  const openId = $derived(detail.state === 'none' ? null : detail.id);
+  $effect(() => {
+    void openId;
+    editing = false;
+  });
   // A new rule starts without the word of the last copy.
   $effect(() => {
     void detail;
@@ -63,7 +71,16 @@
       <dd><code>{shownText(rule.etag)}</code> ({t(`detail.scope.${rule.etag_scope}`)})</dd>
     </dl>
 
-    {#if !rule.editable}<p class="note">{t('detail.not_editable')}</p>{/if}
+    {#if editing}
+      <RuleEditor {app} {rule} onclose={() => (editing = false)} />
+    {:else if rule.etag_scope !== 'rule'}
+      <p class="note">{t('edit.file_scope')}</p>
+    {:else if app.classOfRule(rule) === 'unclassified'}
+      <p class="note">{t('edit.no_class')}</p>
+    {:else}
+      <button type="button" onclick={() => (editing = true)}>{t('edit.open')}</button>
+      {#if !rule.editable}<p class="note">{t('detail.not_editable')}</p>{/if}
+    {/if}
     {#if holdsHidden(rule.text) || holdsHidden(rule.title)}<p class="note">{t('detail.hidden')}</p>{/if}
 
     <h3>{t('detail.text')}</h3>

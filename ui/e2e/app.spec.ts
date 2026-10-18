@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { expectAccessible, violations, watchViolations } from './a11y';
 import { STATE } from './global';
-import { HOSTILE, ORIGIN, pairingLink } from './hub';
+import { changedFiles, changedLines, HOSTILE, ORIGIN, pairingLink } from './hub';
 
 test.use({ locale: 'en-US' });
 
@@ -221,6 +221,14 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.locator('tr#rule-AA-01').getByRole('button').click();
     await expect(page.getByRole('complementary', { name: 'Rule' })).toBeVisible();
     await expectAccessible(page, `detail ${scheme}`);
+    // The editor of a rule that may be written, and the form to retire it.
+    await page.locator('tr#rule-WR-03').getByRole('button').click();
+    const detail = page.getByRole('complementary', { name: 'Rule' });
+    await detail.getByRole('button', { name: 'Edit', exact: true }).click();
+    await expectAccessible(page, `editor ${scheme}`);
+    await detail.getByRole('button', { name: 'Retire' }).click();
+    await expectAccessible(page, `retire form ${scheme}`);
+    await detail.getByRole('button', { name: 'Cancel' }).click();
     await page.keyboard.press('Control+k');
     await expect(page.getByRole('dialog')).toBeVisible();
     await expectAccessible(page, `palette ${scheme}`);
@@ -297,4 +305,52 @@ test('Back is never trapped by a rule that is gone: the entry of an open rule th
   const seen = consoleProblems.get(page) ?? [];
   const rest = seen.filter((m) => !m.includes('404'));
   seen.splice(0, seen.length, ...rest);
+});
+
+test('a rule is edited, taken back, retired and reinstated in the browser, and only the wanted lines of the files move', async ({
+  page,
+}) => {
+  await pair(page);
+  await view(page, 'Rules');
+  const detail = page.getByRole('complementary', { name: 'Rule' });
+  const toast = page.getByRole('status').filter({ hasText: /Saved\.|Taken back\./ });
+
+  // Edit: the severity and the title of WR-01.
+  await page.locator('tr#rule-WR-01').getByRole('button').click();
+  await detail.getByRole('button', { name: 'Edit', exact: true }).click();
+  await detail.getByLabel('Severity').selectOption('critical');
+  await detail.getByLabel('Title (one line)').fill('Edited title');
+  await detail.getByRole('button', { name: 'Save' }).click();
+  await expect(toast).toContainText('Saved.');
+  await expect(detail.getByRole('heading', { name: 'Edited title' })).toBeVisible();
+  expect(changedLines(state().vault)).toEqual([
+    '-severity: recommended',
+    '+severity: critical',
+    '-#### `WR-01` — first writable',
+    '+#### `WR-01` — Edited title',
+  ]);
+
+  // Undo: the file is what it was, byte for byte (nothing differs from the start any more).
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(toast).toContainText('Taken back.');
+  await expect.poll(() => changedLines(state().vault)).toEqual([]);
+  expect(changedFiles(state().vault)).toEqual([]);
+
+  // Retire WR-02 with a reason: it leaves the list, its file moves to _retired, the overview lists it.
+  await page.locator('tr#rule-WR-02').getByRole('button').click();
+  await detail.getByRole('button', { name: 'Edit', exact: true }).click();
+  await detail.getByRole('button', { name: 'Retire' }).click();
+  await detail.getByLabel('Reason (optional)').fill('merged elsewhere');
+  await detail.getByRole('button', { name: 'Retire this rule' }).click();
+  await expect(page.locator('tr#rule-WR-02')).toHaveCount(0);
+  expect(changedFiles(state().vault).some((l) => l.includes('_retired'))).toBe(true);
+  // Only WR-02 moved: the other two rules are untouched.
+  expect(changedFiles(state().vault).every((l) => l.includes('WR-02'))).toBe(true);
+
+  // Reinstate from the overview: the file is where it was.
+  await view(page, 'Overview');
+  await page.getByRole('button', { name: 'Reinstate' }).click();
+  await view(page, 'Rules');
+  await expect(page.locator('tr#rule-WR-02')).toBeVisible();
+  await expect.poll(() => changedFiles(state().vault)).toEqual([]);
 });

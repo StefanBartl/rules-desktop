@@ -6,6 +6,7 @@
   import { translate, type Key } from '../lib/i18n';
   import { shownText } from '../lib/ruletext';
   import { unclassifiedCount } from '../lib/sources';
+  import { reinstateOp } from '../lib/write';
 
   let { app }: { app: App } = $props();
   const t = (key: Key, params: Record<string, string | number> = {}) => translate(app.lang, key, params);
@@ -40,6 +41,21 @@
       <dd>{retired.length}</dd>
     </div>
   </dl>
+
+  {#if retired.length > 0}
+    <h3>{t('retired.list')}</h3>
+    <ul class="plain retired">
+      {#each retired as gone (gone.id)}
+        <li>
+          <code>{shownText(gone.id)}</code>
+          <!-- The hub knows the class of a retired rule; the files of the snapshot do not list it, so the hub refuses. -->
+          <button type="button" disabled={app.writing} onclick={() => void app.write([reinstateOp(gone.id)])}>
+            {t('retired.reinstate')}
+          </button>
+        </li>
+      {/each}
+    </ul>
+  {/if}
 
   <h3>{t('overview.severity')}</h3>
   <ul class="plain severities">

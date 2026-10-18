@@ -83,17 +83,65 @@ export interface Running {
   stop(): void;
 }
 
+/** A rule of the rule set the page may write: one file per rule, the only form `rules-ops/1` writes. */
+function writableRule(id: string, severity: string, title: string): string {
+  return [
+    '---',
+    `id: ${id}`,
+    `severity: ${severity}`,
+    'family: WR',
+    '---',
+    '',
+    `#### \`${id}\` — ${title}`,
+    '',
+    '```rule',
+    `id = "${id}",`,
+    '```',
+    '',
+    `The text of ${id}.`,
+    '',
+    '---',
+    '',
+  ].join('\n');
+}
+
+const GIT = ['-c', 'user.name=e2e', '-c', 'user.email=e2e@example.invalid', '-c', 'core.autocrlf=false'];
+
+/** The lines the writes changed in the files of the vault since it was made (`git diff`, no context). */
+export function changedLines(vault: string): string[] {
+  const diff = execFileSync('git', [...GIT, 'diff', '--no-color', '-U0'], { cwd: vault, encoding: 'utf8' });
+  return diff.split('\n').filter((l) => /^[-+]/.test(l) && !l.startsWith('---') && !l.startsWith('+++'));
+}
+
+/** The files the vault differs in from when it was made, tracked or not (a moved file shows as two). */
+export function changedFiles(vault: string): string[] {
+  const out = execFileSync('git', [...GIT, 'status', '--porcelain', '-uall', '--', 'rulesets/gamma'], { cwd: vault, encoding: 'utf8' });
+  return out.split('\n').filter((l) => l.trim() !== '');
+}
+
 export function prepareVault(): { root: string; vault: string; config: string } {
   const root = mkdtempSync(join(tmpdir(), 'rules-desktop-e2e-'));
   const vault = join(root, 'vault');
   cpSync(join(repo, 'crates', 'rules-hub', 'tests', 'fixtures', 'vault'), vault, { recursive: true });
   writeFileSync(join(vault, 'rulesets', 'alpha', 'regeln', 'hostile.md'), hostileFile());
+  const gamma = join(vault, 'rulesets', 'gamma', '_rules', 'WR');
+  mkdirSync(gamma, { recursive: true });
+  writeFileSync(join(gamma, 'WR-01.md'), writableRule('WR-01', 'recommended', 'first writable'));
+  writeFileSync(join(gamma, 'WR-02.md'), writableRule('WR-02', 'recommended', 'second writable'));
+  writeFileSync(join(gamma, 'WR-03.md'), writableRule('WR-03', 'nice-to-have', 'third writable'));
+  // The state the vault starts from: what a write changed is read from it afterwards.
+  for (const args of [['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'baseline']]) {
+    execFileSync('git', [...GIT, ...args], { cwd: vault, stdio: 'ignore' });
+  }
   const config = join(root, 'config');
   mkdirSync(config);
   writeFileSync(join(config, 'config.json'), JSON.stringify({ vault }));
   writeFileSync(
     join(config, 'sources.json'),
-    JSON.stringify({ schema: 1, sources: { alpha: { class: 'public' }, beta: { class: 'internal' } } }),
+    JSON.stringify({
+      schema: 1,
+      sources: { alpha: { class: 'public' }, beta: { class: 'internal' }, gamma: { class: 'internal' } },
+    }),
   );
   return { root, vault, config };
 }
