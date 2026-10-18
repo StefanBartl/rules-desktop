@@ -67,7 +67,7 @@ focus back asks for a scan.
 
 Keys: `g h`, `g f`, `g l` switch the view; `j` and `k` move; `Enter` opens; `/` goes to the search; `Esc` closes;
 `Ctrl+K` opens the palette (actions and rules in one box). The single keys can be switched off in the Help menu.
-Language (English, German) and colours (as the system, light, dark) are in the menus; both are remembered in the browser.
+Back and Forward of the browser walk through the views and the rules you opened. Language (English, German) and colours (as the system, light, dark) are in the menus; both are remembered in the browser.
 
 ## When something is wrong
 

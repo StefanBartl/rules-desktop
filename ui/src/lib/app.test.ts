@@ -3,6 +3,7 @@ import {
   App,
   EXCHANGE_RETRIES,
   GONE_SETTLE_MS,
+  isNavState,
   PREF_KEYS,
   RESCAN_EVERY_MS,
   SEARCH_DELAY_MS,
@@ -442,5 +443,36 @@ describe('opening the file of a rule', () => {
     s.fake.openStatus = 502;
     await s.app.openInEditor('DEP-01');
     expect(s.app.notice?.key).toBe('notice.open_failed');
+  });
+});
+describe('the places of the history', () => {
+  it('is the view and the rule that is open, and nothing of the filter or the cursor', async () => {
+    const s = await ready();
+    expect(s.app.navState()).toEqual({ view: 'overview', id: null });
+    s.app.setView('rules');
+    s.app.select('DEP-01');
+    s.app.setFilter({ ...s.app.filter, severities: ['required'] });
+    expect(s.app.navState()).toEqual({ view: 'rules', id: null });
+    await s.app.openDetail('DEP-01');
+    expect(s.app.navState()).toEqual({ view: 'rules', id: 'DEP-01' });
+  });
+
+  it('brings the page back to a view and closes or opens the rule as the place says', async () => {
+    const s = await ready();
+    await s.app.openDetail('DEP-01');
+    s.app.restoreNav({ view: 'families', id: null });
+    expect(s.app.view).toBe('families');
+    expect(s.app.detail.state).toBe('none');
+    s.app.restoreNav({ view: 'rules', id: 'DEP-01' });
+    await vi.waitFor(() => expect(s.app.detail.state).toBe('ok'));
+    expect(s.app.view).toBe('rules');
+  });
+
+  it('takes only what the app wrote: a known view and an id of a sane length', () => {
+    expect(isNavState({ view: 'rules', id: 'DEP-01' })).toBe(true);
+    expect(isNavState({ view: 'overview', id: null })).toBe(true);
+    for (const bad of [null, 'rules', {}, { view: 'settings', id: null }, { view: 'rules', id: 7 }, { view: 'rules', id: 'x'.repeat(101) }]) {
+      expect(isNavState(bad), JSON.stringify(bad)).toBe(false);
+    }
   });
 });

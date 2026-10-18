@@ -3,7 +3,8 @@
   // depends on the phase of the page (pairing, offline, engine not ready, ready); everything else is the state of
   // `app` (lib/app.svelte.ts).
   import MenuBar, { type Menu } from 'appkit-ui/MenuBar.svelte';
-  import { VIEWS, type App, type Theme } from './lib/app.svelte';
+  import { installNav } from 'appkit-ui/nav';
+  import { isNavState, VIEWS, type App, type NavState, type Theme } from './lib/app.svelte';
   import { LANGS, translate, type Key, type Lang } from './lib/i18n';
   import { commandFor, type ChordState } from './lib/keys';
   import Detail from './views/Detail.svelte';
@@ -23,6 +24,20 @@
   $effect(() => {
     void app.start(code);
     return () => app.stop();
+  });
+
+  // Back and Forward: the view and the open rule are places of the tab's history. The state is in `history.state`,
+  // not in the address (appkit-ui/nav).
+  const nav = installNav<NavState>({
+    history: window.history,
+    window,
+    isState: isNavState,
+    restore: (place) => app.restoreNav(place),
+  });
+  $effect(() => () => nav.stop());
+  $effect(() => {
+    // Only a page that shows something has a place: a pairing page or an offline page has none to go back to.
+    if (app.phase === 'ready') nav.record(app.navState());
   });
 
   // The language and the theme of the document follow the state.

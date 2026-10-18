@@ -8,7 +8,7 @@ parts and meant to look and behave like it.
 **Status: early development. Nothing is released.** The read-only interface works: the hub serves families, rules,
 search, findings and the rule detail, follows the rule files live and passes its security matrix, axe and a corpus of
 hostile rules in the browser. Writing rules and the native shell follow the phases below. Do not expect a download. How to
-use it: [docs/USAGE.md](docs/USAGE.md); what it does about security: [docs/SECURITY.md](docs/SECURITY.md).
+use it: [docs/USAGE.md](docs/USAGE.md), a walk through one sitting in [docs/WORKFLOW.md](docs/WORKFLOW.md); what it does about security: [docs/SECURITY.md](docs/SECURITY.md).
 
 ## What it is for
 

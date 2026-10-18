@@ -20,6 +20,21 @@ export type Theme = 'auto' | 'light' | 'dark';
 
 export const VIEWS: readonly View[] = ['overview', 'families', 'rules'];
 
+/**
+ * A place the person can go back to: the view and the rule that is open in it. Filters, the search and the cursor are
+ * not places (typing a letter must not make an entry), and nothing of this goes into the address.
+ */
+export interface NavState {
+  view: View;
+  id: string | null;
+}
+
+export function isNavState(value: unknown): value is NavState {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { view?: unknown; id?: unknown };
+  return VIEWS.includes(v.view as View) && (v.id === null || (typeof v.id === 'string' && v.id.length <= 100));
+}
+
 export type Detail =
   | { state: 'none' }
   | { state: 'loading'; id: string }
@@ -553,6 +568,18 @@ export class App {
   closeDetail(): void {
     this.detailAbort?.abort();
     this.detail = { state: 'none' };
+  }
+
+  /** The place the page is at now, for the history of the tab. */
+  navState(): NavState {
+    return { view: this.view, id: this.detail.state === 'none' ? null : this.detail.id };
+  }
+
+  /** Back or Forward brought the tab to this place. */
+  restoreNav(place: NavState): void {
+    this.view = place.view;
+    if (place.id === null) this.closeDetail();
+    else void this.openDetail(place.id);
   }
 
   /** Is this rule the one the detail shows or reads? */

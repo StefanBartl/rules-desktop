@@ -226,3 +226,26 @@ for (const scheme of ['light', 'dark'] as const) {
     await expectAccessible(page, `palette ${scheme}`);
   });
 }
+
+test('Back and Forward walk the views and the open rule, and the address stays clean', async ({ page }) => {
+  await pair(page);
+  const detail = page.getByRole('complementary', { name: 'Rule' });
+  await view(page, 'Families');
+  await view(page, 'Rules');
+  await page.locator('tr#rule-AA-01').getByRole('button').click();
+  await expect(detail.getByRole('heading', { name: 'AA-01' })).toBeVisible();
+  // The place is in the history of the tab, not in the address: no rule id, no fragment.
+  expect(page.url()).toBe(`${ORIGIN}/`);
+  await page.goBack();
+  await expect(detail).toHaveCount(0);
+  await expect(page.locator('tr#rule-AA-01')).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole('table', { name: 'Families' })).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
+  await page.goForward();
+  await page.goForward();
+  await page.goForward();
+  await expect(detail.getByRole('heading', { name: 'AA-01' })).toBeVisible();
+  expect(page.url()).toBe(`${ORIGIN}/`);
+});
