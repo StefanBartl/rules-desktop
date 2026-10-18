@@ -67,6 +67,14 @@ describe('summarize', () => {
     expect(summarize([set], result([{ ...entry, changed_ids: [] }]))).toMatchObject({ saved: 0, undo: [] });
   });
 
+  it('takes the id of a failed entry from the operation when the entry does not say it', () => {
+    const out = summarize(
+      [set],
+      result([{ n: 1, ok: false, op: 'set', changed_ids: [], error: { code: 'conflict', details: { expected: 'a', actual: 'b' } } }]),
+    );
+    expect(out.conflicts[0]?.id).toBe('DEP-01');
+  });
+
   it('tells a conflict from another failure and keeps what was asked', () => {
     const out = summarize(
       [set],

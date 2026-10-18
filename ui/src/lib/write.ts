@@ -69,7 +69,9 @@ function text(value: unknown): string | null {
 export function summarize(request: readonly Op[], result: Result): Outcome {
   const out: Outcome = { saved: 0, changedIds: [], ids: [], conflicts: [], failures: [], warnings: [], undo: [] };
   for (const entry of result.results) {
-    const id = entry.id ?? null;
+    // An entry that failed may not say which rule: the operation that was sent does.
+    const asked = text(request[entry.n - 1]?.['id']);
+    const id = entry.id ?? asked;
     if (entry.warnings) out.warnings.push(...entry.warnings);
     if (!entry.ok) {
       const error = entry.error ?? {};
@@ -155,6 +157,11 @@ export function newOp(rule: NewRule): Op {
 /** The next id the engine named for a family, or `null` (a family it does not have yet, or none left). */
 export function nextOf(doc: NextId, family: string): string | null {
   return doc.items.find((item) => item.family === family)?.next ?? null;
+}
+
+/** Where a rule goes in its document: after or before another rule of the same layout (the engine finds the layout). */
+export function moveOp(id: string, place: { after: string } | { before: string }): Op {
+  return { op: 'move', id, ...place };
 }
 
 /** Bring a retired rule back to the file it came from. */

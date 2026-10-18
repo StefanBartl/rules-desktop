@@ -193,7 +193,7 @@
     width: min(36rem, calc(100vw - 2rem));
   }
   dialog::backdrop {
-    background: rgb(0 0 0 / 0.4);
+    background: var(--backdrop);
   }
   form {
     display: grid;

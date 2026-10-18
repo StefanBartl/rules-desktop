@@ -12,7 +12,9 @@ import { detectLang, isLang, type Key, type Lang } from './i18n';
 import type { Command } from './keys';
 import { bumped, parseFrecency, type Frecency, type PaletteItem } from './palette';
 import { classOf, sourceIndex } from './sources';
-import { clientOpId, nextOf, summarize, type Conflict, type Op, type Outcome } from './write';
+import { retryOp } from './conflicts';
+import type { Body } from './edit';
+import { clientOpId, nextOf, retireOp, setOp, summarize, type Conflict, type Op, type Outcome } from './write';
 
 export type Phase = 'starting' | 'needs_pairing' | 'offline' | 'unavailable' | 'ready';
 export type Connection = 'live' | 'reconnecting' | 'offline';
@@ -368,6 +370,9 @@ export class App {
   /** A selected rule that left the list is not selected any more; the open detail is the stream's business. */
   private keepSelection(): void {
     if (this.selectedId !== null && !this.rules.some((r) => r.id === this.selectedId)) this.selectedId = null;
+    if (this.marked.size > 0 && [...this.marked].some((id) => !this.rules.some((r) => r.id === id))) {
+      this.marked = new Set([...this.marked].filter((id) => this.rules.some((r) => r.id === id)));
+    }
     if (this.selectedFamily !== null && !this.families.some((f) => f.family === this.selectedFamily)) {
       this.selectedFamily = null;
     }
@@ -708,8 +713,14 @@ export class App {
 
   /** A request is on its way: the page does not send a second one beside it. */
   writing = $state(false);
-  /** The operation that met another version of the file: the conflict center shows it (w6); nothing was written. */
-  conflict = $state.raw<Conflict | null>(null);
+  /** The operations that met another version of the file, first first: the conflict center shows them; nothing was written. */
+  conflicts = $state.raw<Conflict[]>([]);
+  /** The rule as the file has it now, for the first conflict (read when the conflict arrived). */
+  conflictRule = $state.raw<Body | null>(null);
+
+  get conflict(): Conflict | null {
+    return this.conflicts[0] ?? null;
+  }
   private opCount = 0;
 
   /** The dialog for a new rule is open. */
@@ -775,8 +786,10 @@ export class App {
   /** Say what came of a write in one notice; a conflict is also kept for the conflict center. */
   private reportWrite(outcome: Outcome, undoable: boolean): void {
     const first = outcome.conflicts[0];
-    this.conflict = first ?? null;
+    this.conflicts = outcome.conflicts;
+    this.conflictRule = null;
     if (first) {
+      void this.readConflictRule(first.id);
       this.notice = { key: 'write.conflict', params: { id: first.id } };
     } else if (outcome.failures[0]) {
       this.notice = { key: 'write.failed', params: { message: outcome.failures[0].message || outcome.failures[0].code } };
@@ -808,9 +821,89 @@ export class App {
     }
   }
 
-  /** Forget the conflict (the person looked at it or went on). */
+  private async readConflictRule(id: string): Promise<void> {
+    try {
+      const doc = await this.env.hub.rule(id);
+      if (this.conflict?.id === id) this.conflictRule = doc.rule;
+    } catch {
+      // The rule may be gone: the conflict center then shows only what was asked.
+    }
+  }
+
+  /** Forget the first conflict (the person looked at it or went on); the next one, if any, comes up. */
   clearConflict(): void {
-    this.conflict = null;
+    this.conflicts = this.conflicts.slice(1);
+    this.conflictRule = null;
+    const next = this.conflict;
+    if (next) void this.readConflictRule(next.id);
+  }
+
+  /**
+   * What the person chose for the first conflict: write the same change onto the version the file has now (their
+   * decision to write over the other change), look at the rule as it is, or drop their change.
+   */
+  async resolveConflict(choice: 'retry' | 'view' | 'drop'): Promise<void> {
+    const conflict = this.conflict;
+    if (!conflict) return;
+    if (choice === 'retry') {
+      const op = retryOp(conflict);
+      this.clearConflict();
+      if (op) await this.write([op]);
+    } else if (choice === 'view') {
+      this.clearConflict();
+      this.setView('rules');
+      await this.openDetail(conflict.id);
+    } else {
+      this.clearConflict();
+    }
+    if (this.notice?.key === 'write.conflict') this.notice = null;
+  }
+
+  // ── the marked rules (several at once) ──────────────────────────────────
+
+  /** The ids the person marked in the list. */
+  marked = $state.raw<ReadonlySet<string>>(new Set());
+
+  /** May the page write this rule? A file of its own, in a rule set that has a class. */
+  canWrite(rule: Pick<RuleSummary, 'source' | 'etag_scope'>): boolean {
+    return rule.etag_scope === 'rule' && this.classOfRule(rule) !== 'unclassified';
+  }
+
+  toggleMark(id: string): void {
+    const next = new Set(this.marked);
+    if (!next.delete(id)) next.add(id);
+    this.marked = next;
+  }
+
+  markShown(on: boolean): void {
+    this.marked = on ? new Set(this.shown.filter((r) => this.canWrite(r)).map((r) => r.id)) : new Set();
+  }
+
+  clearMarks(): void {
+    this.marked = new Set();
+  }
+
+  /** The marked rules the page may write, with the tag it saw for each. */
+  private markedWritable(): { id: string; etag: string; severity: string }[] {
+    return this.rules
+      .filter((r) => this.marked.has(r.id) && this.canWrite(r))
+      .map((r) => ({ id: r.id, etag: r.etag, severity: r.severity }));
+  }
+
+  /** One request for all marked rules: the same severity, or retired. A rule that is already so, or not writable, is left out. */
+  async writeMarked(change: { severity: string } | { retire: true }): Promise<Outcome | null> {
+    const rules = this.markedWritable();
+    const ops =
+      'retire' in change
+        ? rules.map((r) => retireOp(r.id, r.etag))
+        : rules.filter((r) => r.severity !== change.severity).map((r) => setOp(r.id, { severity: change.severity }, r.etag));
+    if (ops.length === 0) {
+      this.notice = { key: 'bulk.none' };
+      return null;
+    }
+    const outcome = await this.write(ops);
+    if (outcome && outcome.conflicts.length === 0 && outcome.failures.length === 0) this.clearMarks();
+    return outcome;
   }
 }
 

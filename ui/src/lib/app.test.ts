@@ -613,3 +613,115 @@ describe('writing', () => {
     expect(s.app.etagOf('NOPE-01')).toBeNull();
   });
 });
+
+describe('several rules at once and the conflict center', () => {
+  // ERR-100 is a file of its own in the golden snapshot (the form the page writes); the DEP and LUA rules are documents.
+  it('marks only rules the page may write, and sends one request for all of them', async () => {
+    const s = await ready();
+    s.app.toggleMark('ERR-100');
+    s.app.toggleMark('DEP-01');
+    expect(s.app.canWrite({ source: 'Checklists/DEP.md', etag_scope: 'file' })).toBe(false);
+    s.app.marked = new Set(['ERR-100', 'DEP-01']);
+    const outcome = await s.app.writeMarked({ severity: 'critical' });
+    expect(outcome?.saved).toBe(1);
+    expect(s.fake.opsRequests).toHaveLength(1);
+    expect(s.fake.opsRequests[0]?.ops).toEqual([
+      { op: 'set', id: 'ERR-100', patch: { severity: 'critical' }, if_match: 'sha256:4102a4b0a072760a' },
+    ]);
+    expect(s.app.marked.size).toBe(0);
+  });
+
+  it('asks for nothing when every marked rule is already so or may not be written', async () => {
+    const s = await ready();
+    s.app.marked = new Set(['ERR-100', 'DEP-01']);
+    expect(await s.app.writeMarked({ severity: 'nice-to-have' })).toBeNull();
+    expect(s.app.notice).toEqual({ key: 'bulk.none' });
+    expect(s.fake.opsRequests).toHaveLength(0);
+  });
+
+  it('retires the marked rules in one request, each with the tag it saw', async () => {
+    const s = await ready();
+    s.app.marked = new Set(['ERR-100']);
+    await s.app.writeMarked({ retire: true });
+    expect(s.fake.opsRequests[0]?.ops).toEqual([{ op: 'retire', id: 'ERR-100', if_match: 'sha256:4102a4b0a072760a' }]);
+  });
+
+  it('forgets a mark when the rule leaves the rule set', async () => {
+    const s = await ready();
+    s.app.marked = new Set(['ERR-100']);
+    const doc = JSON.parse(s.fake.snapshotText) as { rules: { id: string }[] };
+    doc.rules = doc.rules.filter((r) => r.id !== 'ERR-100');
+    s.fake.snapshotText = JSON.stringify(doc);
+    s.fake.etag = 'sha256:gone';
+    await s.app.reload();
+    expect(s.app.marked.size).toBe(0);
+  });
+
+  const conflictAnswer = () => ({
+    status: 200,
+    body: {
+      kind: 'rules.result',
+      dry_run: false,
+      ok: false,
+      results: [
+        { n: 1, ok: false, op: 'set', id: 'ERR-100', changed_ids: [], error: { code: 'conflict', details: { expected: 'sha256:a', actual: 'sha256:b' } } },
+      ],
+    },
+  });
+  const change = { op: 'set', id: 'ERR-100', patch: { severity: 'critical' }, if_match: 'sha256:a' };
+
+  it('reads the rule as the file has it when a change clashes, for the conflict center', async () => {
+    const s = await ready();
+    s.fake.opsAnswer = conflictAnswer;
+    await s.app.write([change]);
+    await vi.waitFor(() => expect(s.app.conflictRule).not.toBeNull());
+    expect(s.app.conflict?.id).toBe('ERR-100');
+  });
+
+  it('writes the same change onto the new version when the person says so, and only then', async () => {
+    const s = await ready();
+    s.fake.opsAnswer = conflictAnswer;
+    await s.app.write([change]);
+    expect(s.fake.opsRequests).toHaveLength(1);
+    s.fake.opsAnswer = (request) => ({
+      status: 200,
+      body: { kind: 'rules.result', dry_run: request.dry_run, ok: true, results: [{ n: 1, ok: true, op: 'set', id: 'ERR-100', changed_ids: ['ERR-100'] }] },
+    });
+    await s.app.resolveConflict('retry');
+    expect(s.fake.opsRequests).toHaveLength(2);
+    expect(s.fake.opsRequests[1]?.ops).toEqual([{ ...change, if_match: 'sha256:b' }]);
+    expect(s.app.conflict).toBeNull();
+    expect(s.app.notice?.key).toBe('write.saved');
+  });
+
+  it('writes nothing when the person looks at the rule or drops the change', async () => {
+    const s = await ready();
+    s.fake.opsAnswer = conflictAnswer;
+    await s.app.write([change]);
+    await s.app.resolveConflict('view');
+    expect(s.app.conflict).toBeNull();
+    expect(s.app.view).toBe('rules');
+    expect(s.app.detail.state === 'none' ? null : s.app.detail.id).toBe('ERR-100');
+    await s.app.write([change]);
+    await s.app.resolveConflict('drop');
+    expect(s.app.conflict).toBeNull();
+    expect(s.fake.opsRequests).toHaveLength(2);
+  });
+
+  it('brings up the next conflict of a request after the first is dealt with', async () => {
+    const s = await ready();
+    s.fake.opsAnswer = () => ({
+      status: 200,
+      body: {
+        kind: 'rules.result',
+        dry_run: false,
+        ok: false,
+        results: ['ERR-100', 'DEP-01'].map((id, i) => ({ n: i + 1, ok: false, op: 'set', id, changed_ids: [], error: { code: 'conflict', details: { expected: 'a', actual: 'b' } } })),
+      },
+    });
+    await s.app.write([change, { ...change, id: 'DEP-01' }]);
+    expect(s.app.conflicts.map((c) => c.id)).toEqual(['ERR-100', 'DEP-01']);
+    s.app.clearConflict();
+    expect(s.app.conflict?.id).toBe('DEP-01');
+  });
+});

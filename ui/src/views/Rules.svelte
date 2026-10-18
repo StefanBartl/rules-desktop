@@ -30,6 +30,9 @@
   const shown = $derived(app.shown);
   const hits = $derived(app.searchHits);
   const searching = $derived(hits !== null && hits.query === app.filter.query.trim());
+  let bulkSeverity = $state<string>('critical');
+  const writable = $derived(shown.filter((r) => app.canWrite(r)));
+  const allMarked = $derived(writable.length > 0 && writable.every((r) => app.marked.has(r.id)));
 </script>
 
 <section aria-labelledby="rules-h">
@@ -83,12 +86,36 @@
     {#if searching && hits?.cut}<span class="note">{t('search.cut', { total: hits.total, shown: hits.ids.size })}</span>{/if}
   </p>
 
+  {#if app.marked.size > 0}
+    <div class="bulk" role="group" aria-label={t('bulk.marked', { n: app.marked.size })}>
+      <span>{t('bulk.marked', { n: app.marked.size })}</span>
+      <label>
+        <span class="sr">{t('bulk.severity')}</span>
+        <select bind:value={bulkSeverity}>
+          {#each SEVERITIES as value (value)}<option {value}>{t(`severity.${value}`)}</option>{/each}
+        </select>
+      </label>
+      <button type="button" disabled={app.writing} onclick={() => void app.writeMarked({ severity: bulkSeverity })}>{t('bulk.apply')}</button>
+      <button type="button" disabled={app.writing} onclick={() => void app.writeMarked({ retire: true })}>{t('bulk.retire')}</button>
+      <button type="button" onclick={() => app.clearMarks()}>{t('bulk.clear')}</button>
+    </div>
+  {/if}
+
   {#if shown.length === 0}
     <p class="muted">{t('list.empty')}</p>
   {:else}
     <table aria-label={t('list.label')}>
       <thead>
         <tr>
+          <th scope="col">
+            <input
+              type="checkbox"
+              aria-label={t('bulk.mark_all')}
+              checked={allMarked}
+              disabled={writable.length === 0}
+              onchange={(e) => app.markShown(e.currentTarget.checked)}
+            />
+          </th>
           <th scope="col">{t('list.id')}</th>
           <th scope="col">{t('list.title')}</th>
           <th scope="col">{t('list.severity')}</th>
@@ -100,6 +127,15 @@
         {#each shown as rule (rule.id)}
           {@const cls = app.classOfRule(rule)}
           <tr id={`rule-${rule.id}`} class:cursor={app.selectedId === rule.id} aria-selected={app.selectedId === rule.id}>
+            <td>
+              <input
+                type="checkbox"
+                aria-label={t('bulk.mark', { id: rule.id })}
+                checked={app.marked.has(rule.id)}
+                disabled={!app.canWrite(rule)}
+                onchange={() => app.toggleMark(rule.id)}
+              />
+            </td>
             <th scope="row"><code>{shownText(rule.id)}</code></th>
             <td class="title">
               <button type="button" onclick={() => void app.openDetail(rule.id)}>{shownText(titleText(rule.title, rule.id))}</button>
@@ -137,6 +173,39 @@
     border-radius: var(--radius);
     padding: 0.3rem 0.7rem;
     cursor: pointer;
+  }
+  .bulk {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+    margin: 0.4rem 0;
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .bulk button {
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 0.15rem 0.6rem;
+    cursor: pointer;
+    color: var(--text);
+  }
+  .bulk select {
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+  }
+  .sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .count {
     margin: 0.3rem 0;

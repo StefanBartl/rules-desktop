@@ -234,6 +234,10 @@ for (const scheme of ['light', 'dark'] as const) {
     await expectAccessible(page, `new rule ${scheme}`);
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog', { name: 'New rule' })).toHaveCount(0);
+    // Several rules marked: the bar for the marked.
+    await page.getByRole('checkbox', { name: 'Mark WR-01' }).check();
+    await expectAccessible(page, `marked ${scheme}`);
+    await page.getByRole('button', { name: 'Clear marks' }).click();
     await page.keyboard.press('Control+k');
     await expect(page.getByRole('dialog')).toBeVisible();
     await expectAccessible(page, `palette ${scheme}`);
@@ -398,4 +402,57 @@ test('a new rule is previewed, made with the next id and taken back, and only it
   await expect(page.locator('tr#rule-WR-04')).toHaveCount(0);
   expect(files().every((l) => l.includes('WR-04'))).toBe(true);
   expect(files().some((l) => l.includes('_retired'))).toBe(true);
+});
+
+test('several rules are changed in one request and taken back, and only their severity lines move', async ({ page }) => {
+  await pair(page);
+  await view(page, 'Rules');
+  // A rule in a document cannot be marked: the page does not write it.
+  await expect(page.getByRole('checkbox', { name: 'Mark AA-01' })).toBeDisabled();
+  await page.getByRole('checkbox', { name: 'Mark WR-01' }).check();
+  await page.getByRole('checkbox', { name: 'Mark WR-03' }).check();
+  await expect(page.getByText('2 marked')).toBeVisible();
+  await page.getByLabel('Set severity of the marked').selectOption('critical');
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await expect(page.getByRole('status').filter({ hasText: '2 rules saved.' })).toBeVisible();
+  expect(changedLines(state().vault).sort()).toEqual([
+    '+severity: critical',
+    '+severity: critical',
+    '-severity: nice-to-have',
+    '-severity: recommended',
+  ]);
+  // The marks are gone, and one Undo takes both back.
+  await expect(page.getByText('2 marked')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect.poll(() => changedLines(state().vault)).toEqual([]);
+});
+
+test('a change that met another version is not written until the person chooses, and then lands on the new version', async ({
+  page,
+}) => {
+  await pair(page);
+  await view(page, 'Rules');
+  const detail = page.getByRole('complementary', { name: 'Rule' });
+  await page.locator('tr#rule-WR-01').getByRole('button').click();
+  await detail.getByRole('button', { name: 'Edit', exact: true }).click();
+  await detail.getByLabel('Severity').selectOption('nice-to-have');
+
+  // Somebody else changes the file while the editor is open.
+  const file = join(state().vault, 'rulesets', 'gamma', '_rules', 'WR', 'WR-01.md');
+  writeFileSync(file, readFileSync(file, 'utf8').replace('The text of WR-01.', 'The text of WR-01, changed elsewhere.'));
+  await detail.getByRole('button', { name: 'Save' }).click();
+
+  // Nothing is written: the center shows the field and both versions.
+  const center = page.getByRole('dialog', { name: 'Changed in the meantime' });
+  await expect(center).toBeVisible();
+  await expect(center.getByRole('row', { name: /severity/ })).toContainText('nice-to-have');
+  await expectAccessible(page, 'conflict center');
+  expect(readFileSync(file, 'utf8')).toContain('severity: recommended');
+  expect(readFileSync(file, 'utf8')).toContain('changed elsewhere');
+
+  // The person writes the change onto the new version: their line changes, the other change stays.
+  await center.getByRole('button', { name: 'Write my change onto the new version' }).click();
+  await expect(center).toHaveCount(0);
+  await expect.poll(() => readFileSync(file, 'utf8')).toContain('severity: nice-to-have');
+  expect(readFileSync(file, 'utf8')).toContain('changed elsewhere');
 });

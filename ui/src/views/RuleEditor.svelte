@@ -6,7 +6,7 @@
   import type { App } from '../lib/app.svelte';
   import { draftOf, patchOf, unchanged, type Body, type Draft } from '../lib/edit';
   import { translate, type Key } from '../lib/i18n';
-  import { retireOp, setOp } from '../lib/write';
+  import { moveOp, retireOp, setOp } from '../lib/write';
 
   let { app, rule, onclose }: { app: App; rule: Body; onclose: () => void } = $props();
   const t = (key: Key, params: Record<string, string | number> = {}) => translate(app.lang, key, params);
@@ -18,6 +18,9 @@
   let retiring = $state(false);
   let reason = $state('');
   let replacedBy = $state('');
+  let moving = $state(false);
+  let moveTo = $state('');
+  let moveWhere = $state<'after' | 'before'>('after');
   const dirty = $derived(!unchanged(rule, draft));
 
   async function save(): Promise<void> {
@@ -28,6 +31,13 @@
     }
     problem = null;
     const outcome = await app.write([setOp(rule.id, result.patch, rule.etag)]);
+    if (outcome && outcome.saved > 0 && outcome.conflicts.length === 0 && outcome.failures.length === 0) onclose();
+  }
+
+  async function move(): Promise<void> {
+    const target = moveTo.trim();
+    if (target === '') return;
+    const outcome = await app.write([moveOp(rule.id, moveWhere === 'after' ? { after: target } : { before: target })]);
     if (outcome && outcome.saved > 0 && outcome.conflicts.length === 0 && outcome.failures.length === 0) onclose();
   }
 
@@ -80,9 +90,27 @@
   <div class="row">
     <button type="submit" disabled={!dirty || app.writing}>{t('edit.save')}</button>
     <button type="button" onclick={onclose}>{t('edit.cancel')}</button>
-    <button type="button" class="push" onclick={() => (retiring = !retiring)} aria-expanded={retiring}>{t('retire.open')}</button>
+    <button type="button" class="push" onclick={() => (moving = !moving)} aria-expanded={moving}>{t('move.open')}</button>
+    <button type="button" onclick={() => (retiring = !retiring)} aria-expanded={retiring}>{t('retire.open')}</button>
   </div>
 </form>
+
+{#if moving}
+  <div class="retire">
+    <p class="muted">{t('move.hint')}</p>
+    <label>
+      <select bind:value={moveWhere} aria-label={t('move.open')}>
+        <option value="after">{t('move.after')}</option>
+        <option value="before">{t('move.before')}</option>
+      </select>
+    </label>
+    <label>
+      {t('move.target')}
+      <input type="text" bind:value={moveTo} />
+    </label>
+    <button type="button" disabled={app.writing || moveTo.trim() === ''} onclick={() => void move()}>{t('move.confirm')}</button>
+  </div>
+{/if}
 
 {#if retiring}
   <div class="retire">

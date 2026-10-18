@@ -10,6 +10,7 @@
   import Detail from './views/Detail.svelte';
   import Families from './views/Families.svelte';
   import Overview from './views/Overview.svelte';
+  import ConflictCenter from './views/ConflictCenter.svelte';
   import NewRule from './views/NewRule.svelte';
   import Palette from './views/Palette.svelte';
   import Rules from './views/Rules.svelte';
@@ -180,6 +181,7 @@
 {#if app.phase === 'ready'}
   <Palette {app} />
   <NewRule {app} />
+  <ConflictCenter {app} />
 {/if}
 <Toast {app} />
 
