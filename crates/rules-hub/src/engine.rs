@@ -3,7 +3,8 @@
 //! `CliEngine`.
 //!
 //! A [`Method`] is a closed list, never a string from outside: the only way from a name to a call
-//! is [`Calls::parse`]. This app only reads; the table holds no call that writes.
+//! is [`Calls::parse`]. The one call that writes is `ops`, the door of `rules-ops/1`; which of its
+//! operations the page may ask for is the hub's list (`write::OPS_ALLOWED`), not this table's.
 
 pub use appkit_hub::engine::*;
 
@@ -70,14 +71,17 @@ pub fn cli_config(setup: &Setup, env: Env) -> CliEngineConfig {
     }
 }
 
-/// The calls of `rules-export/1` this hub makes. The seam reads the flags of each entry; it knows
-/// no call by name. `bodies` is not a call of the engine: it names the pages of rule text the
-/// search index asks for, answered inside the hub from `snapshot` and `rule`, and never sent.
-static SPECS: [MethodSpec; 4] = [
+/// The calls of `rules-export/1` and `rules-ops/1` this hub makes. The seam reads the flags of each
+/// entry; it knows no call by name. `bodies` is not a call of the engine: it names the pages of rule
+/// text the search index asks for, answered inside the hub from `snapshot` and `rule`, and never
+/// sent. `ops` is the one that writes; its answer is a `rules.result`.
+static SPECS: [MethodSpec; 6] = [
     MethodSpec::bare("hello", "rules.hello"),
     MethodSpec::bare("snapshot", "rules.snapshot"),
     MethodSpec::read("rule", "rules.rule"),
     MethodSpec::read("bodies", "rules.bodies"),
+    MethodSpec::read("next_id", "rules.next_id"),
+    MethodSpec::write("ops", "rules.result"),
 ];
 
 /// The calls of the rules engine, by name.
@@ -89,9 +93,18 @@ impl Calls {
     pub const Snapshot: Method = Method::new(&SPECS[1]);
     pub const Rule: Method = Method::new(&SPECS[2]);
     pub const Bodies: Method = Method::new(&SPECS[3]);
+    pub const NextId: Method = Method::new(&SPECS[4]);
+    pub const Ops: Method = Method::new(&SPECS[5]);
 
     /// Every call of the table.
-    pub const ALL: [Method; 4] = [Self::Hello, Self::Snapshot, Self::Rule, Self::Bodies];
+    pub const ALL: [Method; 6] = [
+        Self::Hello,
+        Self::Snapshot,
+        Self::Rule,
+        Self::Bodies,
+        Self::NextId,
+        Self::Ops,
+    ];
 
     /// Parse the name of a route or a request. Nothing else is accepted.
     #[must_use]
@@ -109,10 +122,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_call_only_reads_and_none_runs_aside() {
+    fn only_ops_writes_and_needs_a_request_and_none_runs_aside() {
         for m in Calls::ALL {
-            assert!(!m.writes(), "{}", m.as_str());
-            assert!(!m.needs_params(), "{}", m.as_str());
+            assert_eq!(m.writes(), m == Calls::Ops, "{}", m.as_str());
+            assert_eq!(m.needs_params(), m == Calls::Ops, "{}", m.as_str());
             assert!(!m.is_aside(), "{}", m.as_str());
         }
     }
@@ -131,9 +144,15 @@ mod tests {
     fn every_name_round_trips_and_every_answer_kind_is_the_rules_engines() {
         for m in Calls::ALL {
             assert_eq!(Calls::parse(m.as_str()), Some(m));
-            assert_eq!(m.reply_kind(), format!("rules.{}", m.as_str()));
+            // The write door answers with a `rules.result`, the other calls with `rules.<name>`.
+            let want = if m == Calls::Ops {
+                "rules.result".to_owned()
+            } else {
+                format!("rules.{}", m.as_str())
+            };
+            assert_eq!(m.reply_kind(), want);
         }
-        for bad in ["", "Rule", "rules.rule", "ops", "check", "list"] {
+        for bad in ["", "Rule", "rules.rule", "Ops", "check", "list", "waivers"] {
             assert_eq!(Calls::parse(bad), None, "{bad:?}");
         }
     }

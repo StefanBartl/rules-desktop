@@ -23,6 +23,8 @@ const HELLO: &str = include_str!("fixtures/golden/hello.json");
 const SNAPSHOT: &str = include_str!("fixtures/golden/snapshot.json");
 const RULE: &str = include_str!("fixtures/golden/rule.json");
 const ERROR: &str = include_str!("fixtures/golden/error.json");
+const NEXT_ID: &str = include_str!("fixtures/golden/next_id.json");
+const RESULT: &str = include_str!("fixtures/golden/result.json");
 /// What the hub answers `sources` with for the golden snapshot; the page's tests answer with it.
 const HUB_SOURCES: &str = include_str!("fixtures/hub/sources.json");
 
@@ -36,6 +38,8 @@ struct FakeEngine {
     snapshot: Mutex<String>,
     hello: Mutex<Result<String, ()>>,
     rule: Mutex<String>,
+    /// What `ops` answers: the golden dry run, unless a test says what a write answers.
+    ops: Mutex<String>,
     asked: Mutex<Vec<(&'static str, Option<Value>)>>,
 }
 
@@ -45,6 +49,7 @@ impl FakeEngine {
             snapshot: Mutex::new(SNAPSHOT.trim_end().to_owned()),
             hello: Mutex::new(Ok(HELLO.trim_end().to_owned())),
             rule: Mutex::new(RULE.trim_end().to_owned()),
+            ops: Mutex::new(RESULT.trim_end().to_owned()),
             asked: Mutex::new(Vec::new()),
         })
     }
@@ -101,6 +106,8 @@ impl Engine for FakeEngine {
                     }
                     self.rule.lock().unwrap().clone()
                 }
+                "next_id" => NEXT_ID.trim_end().to_owned(),
+                "ops" => self.ops.lock().unwrap().clone(),
                 other => panic!("the fake engine was asked {other}"),
             };
             Ok(Reply {
@@ -120,7 +127,13 @@ fn ready() -> HubStatus {
     HubStatus {
         engine_ready: true,
         problem: None,
-        capabilities: vec!["hello".into(), "snapshot".into(), "rule".into()],
+        capabilities: vec![
+            "hello".into(),
+            "snapshot".into(),
+            "rule".into(),
+            "next_id".into(),
+            "ops".into(),
+        ],
     }
 }
 
@@ -144,13 +157,24 @@ async fn start_full(
     watch: Option<Watch>,
     editor: Option<rules_hub::Editor>,
 ) -> Hub {
+    let limits = Limits {
+        snapshot_max_age: max_age,
+        ..Limits::default()
+    };
+    start_limited(engine, limits, sources, watch, editor).await
+}
+
+async fn start_limited(
+    engine: Option<Arc<FakeEngine>>,
+    limits: Limits,
+    sources: Arc<SourcePolicy>,
+    watch: Option<Watch>,
+    editor: Option<rules_hub::Editor>,
+) -> Hub {
     let control = Secret::generate(TOKEN_BYTES).unwrap();
     let server = rules_hub::start(rules_hub::Start {
         addr: "127.0.0.1:0".parse().unwrap(),
-        limits: Limits {
-            snapshot_max_age: max_age,
-            ..Limits::default()
-        },
+        limits,
         clock: Arc::new(ManualClock::new()),
         pairing_ttl: Duration::from_secs(60),
         control_secret: control.clone(),
@@ -200,7 +224,7 @@ async fn every_route_of_the_table_is_served_to_a_session_and_to_nobody_else() {
         let without = get(&hub.server, &route(name), None).await;
         assert_eq!(without.status, 401, "{name}: {without:?}");
         // The stream does not end and the rescan is a POST: both are tried on their own below.
-        if matches!(*name, "events" | "rescan" | "open") {
+        if matches!(*name, "events" | "rescan" | "open" | "ops") {
             continue;
         }
         let with = hub.get(&route(name)).await;
@@ -213,6 +237,7 @@ async fn every_route_of_the_table_is_served_to_a_session_and_to_nobody_else() {
     assert_eq!(seen.get("rule"), Some(&400));
     assert_eq!(seen.get("sources"), Some(&200));
     assert_eq!(seen.get("about"), Some(&200));
+    assert_eq!(seen.get("next_id"), Some(&200));
     // `search` without a query is a bad query, told by the route.
     assert_eq!(seen.get("search"), Some(&400));
 }
@@ -1129,4 +1154,172 @@ async fn a_hub_without_an_editor_says_so_and_a_session_is_needed() {
     assert_eq!(r.json()["error"]["code"], "open_unavailable");
     let anonymous = post(&hub.server, &route("open"), None, r#"{"id":"DEP-01"}"#).await;
     assert_eq!(anonymous.status, 401, "{anonymous:?}");
+}
+
+// ── the write side: `next_id` and `ops` ─────────────────────────────────────────────────────────
+
+/// A write the engine did: one rule changed.
+const WROTE: &str = r#"{"kind":"rules.result","ok":true,"dry_run":false,"results":[{"ok":true,"op":"set","id":"DEP-01","changed_ids":["DEP-01"]}]}"#;
+/// A write that changed nothing (a failed operation, a rule that was already so).
+const NOTHING: &str = r#"{"kind":"rules.result","ok":false,"dry_run":false,"results":[{"ok":false,"op":"set","id":"DEP-01","changed_ids":[],"error":{"code":"conflict"}}]}"#;
+
+fn ops_body(op: &str, dry_run: bool) -> String {
+    json!({
+        "schema": 1,
+        "client_op_id": "c-1",
+        "dry_run": dry_run,
+        "ops": [{ "op": op, "id": "DEP-01", "patch": { "severity": "critical" } }],
+    })
+    .to_string()
+}
+
+impl Hub {
+    async fn ops(&self, body: &str) -> appkit_testkit::wire::Reply {
+        post(&self.server, &route("ops"), Some(&self.token), body).await
+    }
+}
+
+#[tokio::test]
+async fn next_id_asks_for_one_family_or_for_all_and_passes_the_answer_on() {
+    let engine = FakeEngine::new();
+    let hub = start(&engine).await;
+    let all = hub.get(&route("next_id")).await;
+    assert_eq!(all.status, 200, "{all:?}");
+    assert_eq!(all.body, NEXT_ID.trim_end(), "passed on byte for byte");
+    let one = hub.get(&format!("{}?family=DEP", route("next_id"))).await;
+    assert_eq!(one.status, 200, "{one:?}");
+    assert_eq!(
+        engine.params_of("next_id"),
+        vec![None, Some(json!({ "family": "DEP" }))]
+    );
+    // What is not a family never reaches the engine.
+    for bad in [
+        "family=",
+        "family=a%20b",
+        "family=A&family=B",
+        "x=1",
+        "family=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    ] {
+        let r = hub.get(&format!("{}?{bad}", route("next_id"))).await;
+        assert_eq!(r.status, 400, "{bad}: {r:?}");
+    }
+    assert_eq!(engine.count("next_id"), 2);
+    assert_eq!(get(&hub.server, &route("next_id"), None).await.status, 401);
+}
+
+#[tokio::test]
+async fn a_dry_run_is_passed_on_as_it_is_and_reads_nothing_again() {
+    let engine = FakeEngine::new();
+    let hub = start(&engine).await;
+    hub.get(&route("snapshot")).await;
+    let body = ops_body("set", true);
+    let r = hub.ops(&body).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(
+        r.body,
+        RESULT.trim_end(),
+        "the engine's document, unchanged"
+    );
+    assert_eq!(
+        engine.params_of("ops"),
+        vec![Some(serde_json::from_str::<Value>(&body).unwrap())]
+    );
+    assert_eq!(engine.count("snapshot"), 1, "a dry run changes nothing");
+}
+
+#[tokio::test]
+async fn a_write_that_changed_something_is_followed_by_a_read_before_the_answer() {
+    let engine = FakeEngine::new();
+    let hub = start(&engine).await;
+    hub.get(&route("snapshot")).await;
+    assert_eq!(engine.count("snapshot"), 1);
+    *engine.ops.lock().unwrap() = WROTE.to_owned();
+    let r = hub.ops(&ops_body("set", false)).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.body, WROTE);
+    assert_eq!(engine.count("snapshot"), 2, "the page reads the new state");
+
+    // A write that changed nothing leaves the held snapshot alone.
+    *engine.ops.lock().unwrap() = NOTHING.to_owned();
+    let r = hub.ops(&ops_body("set", false)).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(
+        r.body, NOTHING,
+        "a conflict is told per operation, not as an error"
+    );
+    assert_eq!(engine.count("snapshot"), 2);
+}
+
+#[tokio::test]
+async fn what_is_not_a_request_or_not_served_is_refused_without_a_question_to_the_engine() {
+    let engine = FakeEngine::new();
+    let hub = start(&engine).await;
+    for (name, body) in [
+        ("not JSON", "nope".to_owned()),
+        ("not an object", "[]".to_owned()),
+        (
+            "a field of its own",
+            r#"{"ops":[{"op":"set"}],"x":1}"#.to_owned(),
+        ),
+        ("no operation", r#"{"ops":[]}"#.to_owned()),
+        ("an unknown operation", ops_body("explode", false)),
+        ("waive", ops_body("waive", false)),
+        ("renew", ops_body("renew", false)),
+        ("remove", ops_body("remove", false)),
+        (
+            "too many",
+            json!({ "ops": vec![json!({ "op": "set" }); 101] }).to_string(),
+        ),
+        (
+            "a bad client_op_id",
+            r#"{"client_op_id":"a b","ops":[{"op":"set"}]}"#.to_owned(),
+        ),
+    ] {
+        let r = hub.ops(&body).await;
+        assert_eq!(r.status, 400, "{name}: {r:?}");
+    }
+    assert_eq!(engine.count("ops"), 0);
+    let anonymous = post(&hub.server, &route("ops"), None, &ops_body("set", true)).await;
+    assert_eq!(anonymous.status, 401, "{anonymous:?}");
+}
+
+#[tokio::test]
+async fn writes_are_counted_and_dry_runs_are_not() {
+    let engine = FakeEngine::new();
+    let limits = Limits {
+        post_max: 6,
+        ..Limits::default()
+    };
+    let hub = start_limited(
+        Some(Arc::clone(&engine)),
+        limits,
+        Arc::default(),
+        None,
+        None,
+    )
+    .await;
+    // The pairing that made the session was a mutation too: the limit is reached after a few writes.
+    let mut done = 0;
+    loop {
+        let r = hub.ops(&ops_body("set", false)).await;
+        if r.status == 429 {
+            break;
+        }
+        assert_eq!(r.status, 200, "{r:?}");
+        done += 1;
+        assert!(done < 10, "no limit was reached");
+    }
+    assert!(done >= 1, "the limit left no write at all");
+    assert_eq!(engine.count("ops"), done);
+    // A dry run asks the engine and costs the writes nothing.
+    assert_eq!(hub.ops(&ops_body("set", true)).await.status, 200);
+    assert_eq!(engine.count("ops"), done + 1);
+}
+
+#[tokio::test]
+async fn without_an_engine_a_write_says_so() {
+    let hub = start_with(None, None).await;
+    let r = hub.ops(&ops_body("set", false)).await;
+    assert_eq!(r.status, 503, "{r:?}");
+    assert_eq!(r.json()["error"]["code"], "engine_unavailable");
 }

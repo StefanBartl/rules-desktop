@@ -41,6 +41,8 @@ pub const ROUTES: &[(&str, MakeRoute)] = &[
     ("search", || get(live::search)),
     ("rescan", || post(live::rescan)),
     ("open", || post(open)),
+    ("next_id", || get(crate::write::next_id)),
+    ("ops", || post(crate::write::ops)),
 ];
 
 /// The router of the app, built from [`ROUTES`] and from nothing else. Invariant: this stays a
@@ -355,7 +357,10 @@ mod tests {
         }
         assert_eq!(
             names,
-            ["snapshot", "rule", "sources", "about", "events", "search", "rescan", "open"]
+            [
+                "snapshot", "rule", "sources", "about", "events", "search", "rescan", "open",
+                "next_id", "ops"
+            ]
         );
     }
 

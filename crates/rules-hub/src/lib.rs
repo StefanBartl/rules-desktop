@@ -27,6 +27,7 @@ pub mod sources;
 pub mod store;
 pub mod ui;
 pub mod watch;
+pub mod write;
 
 pub use routes::{MakeRoute, Shared, MAX_ID_BYTES, ROUTES};
 pub use runtime::{Editor, RulesRuntime, Watch};
@@ -128,7 +129,9 @@ pub async fn start(s: Start) -> std::io::Result<RunningServer> {
             instance: s.instance,
             app: IDENTITY.app,
             version: version(),
-            guard_rules: GuardRules::new(IDENTITY.route("hello"), []),
+            // `ops` takes writes and dry runs (only its body tells them apart: the writes are counted again,
+            // strictly, by the handler) and has the coarse limit of the writes.
+            guard_rules: GuardRules::new(IDENTITY.route("hello"), [IDENTITY.route("ops")]),
             ui: Arc::new(s.ui),
             runtime: RulesRuntime::new(s.engine, s.status, s.sources, max_age, s.watch, s.editor),
             // There is one vault and no list to choose from, so this is never called.

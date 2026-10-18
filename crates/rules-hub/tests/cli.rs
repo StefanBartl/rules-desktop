@@ -654,3 +654,144 @@ async fn open_finds_the_file_by_the_place_the_engine_knows_not_by_the_name_in_th
     }
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A rule as a file of its own (`<rule set>/_rules/<FAMILY>/<ID>.md`), the form `rules-ops/1` writes.
+fn write_rule_file(set: &Path, id: &str, severity: &str, title: &str) -> PathBuf {
+    let family = id.split('-').next().unwrap();
+    let file = set.join("_rules").join(family).join(format!("{id}.md"));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &file,
+        format!(
+            "---\nid: {id}\nseverity: {severity}\nfamily: {family}\n---\n\n#### `{id}` — {title}\n\n```rule\nid = \"{id}\",\n```\n\nThe text of the rule.\n\n---\n"
+        ),
+    )
+    .unwrap();
+    file
+}
+
+/// `POST /api/rules/ops` as the page sends it: a session, the origin of the page, JSON.
+async fn post_ops(running: &Running, token: &str, body: &Value) -> (u16, Value) {
+    let auth = format!("Bearer {token}");
+    let origin = format!("http://127.0.0.1:{}", running.port);
+    let reply = client::request(
+        running.port,
+        "POST",
+        "/api/rules/ops",
+        &[
+            ("Authorization", &auth),
+            ("Origin", &origin),
+            ("Content-Type", "application/json"),
+        ],
+        &body.to_string(),
+    )
+    .await
+    .expect("request");
+    (
+        reply.status,
+        serde_json::from_str(&reply.body).unwrap_or(Value::Null),
+    )
+}
+
+fn severity_of(snapshot: &Value, id: &str) -> Option<String> {
+    snapshot["rules"].as_array().and_then(|rules| {
+        rules
+            .iter()
+            .find(|r| r["id"] == id)
+            .and_then(|r| r["severity"].as_str().map(str::to_owned))
+    })
+}
+
+#[tokio::test]
+async fn a_rule_is_changed_and_changed_back_through_the_real_engine_and_only_its_line_moves() {
+    let base = std::env::temp_dir().join(format!("rules-desktop-write-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let set = base.join("set");
+    let file = write_rule_file(&set, "WW-01", "recommended", "first");
+    let other = write_rule_file(&set, "WW-02", "recommended", "second");
+    let (before, other_before) = (
+        std::fs::read_to_string(&file).unwrap(),
+        std::fs::read_to_string(&other).unwrap(),
+    );
+    let vault = base.join("vault");
+    std::fs::create_dir_all(&vault).unwrap();
+    std::fs::write(
+        vault.join(".rules.json"),
+        serde_json::json!({ "rulesets": [set] }).to_string(),
+    )
+    .unwrap();
+    let dir = config_dir(
+        "write",
+        Some(r#"{"schema":1,"default":"internal","sources":{}}"#),
+    );
+    std::fs::write(
+        dir.join("config.json"),
+        serde_json::json!({ "vault": vault }).to_string(),
+    )
+    .unwrap();
+    let hub = serve_in(dir);
+    let token = token(&hub).await;
+    let snapshot = get(&hub, &token, "/api/rules/snapshot").await.1;
+    assert_eq!(
+        severity_of(&snapshot, "WW-01").as_deref(),
+        Some("recommended")
+    );
+    let detail = get(&hub, &token, "/api/rules/rule?id=WW-01").await.1;
+    assert_eq!(detail["rule"]["etag_scope"], "rule", "{detail}");
+    let etag = detail["rule"]["etag"].as_str().unwrap().to_owned();
+
+    // The next id is the engine's to say.
+    let next = get(&hub, &token, "/api/rules/next_id?family=WW").await.1;
+    assert_eq!(next["items"][0]["next"], "WW-03", "{next}");
+
+    // A dry run says what would happen and writes nothing.
+    let set_critical = |dry_run: bool, if_match: &str| {
+        serde_json::json!({
+            "schema": 1, "client_op_id": "w-1", "dry_run": dry_run,
+            "ops": [{ "op": "set", "id": "WW-01", "patch": { "severity": "critical" }, "if_match": if_match }],
+        })
+    };
+    let (status, dry) = post_ops(&hub, &token, &set_critical(true, &etag)).await;
+    assert_eq!(status, 200, "{dry}");
+    assert_eq!(dry["ok"], true, "{dry}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+
+    // A version the person did not see is a conflict, told per operation, and nothing is written.
+    let (status, stale) = post_ops(
+        &hub,
+        &token,
+        &set_critical(false, "sha256:0000000000000000"),
+    )
+    .await;
+    assert_eq!(status, 200, "{stale}");
+    assert_eq!(stale["ok"], false, "{stale}");
+    assert_eq!(stale["results"][0]["error"]["code"], "conflict", "{stale}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+
+    // The write: the file changes in the one line, the other rule's file not at all, and the hub has read
+    // the new state before it answers.
+    let (status, done) = post_ops(&hub, &token, &set_critical(false, &etag)).await;
+    assert_eq!(status, 200, "{done}");
+    assert_eq!(done["ok"], true, "{done}");
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        before.replace("severity: recommended", "severity: critical")
+    );
+    assert_eq!(std::fs::read_to_string(&other).unwrap(), other_before);
+    let snapshot = get(&hub, &token, "/api/rules/snapshot").await.1;
+    assert_eq!(severity_of(&snapshot, "WW-01").as_deref(), Some("critical"));
+
+    // Back: the engine's own inverse, as a request of its own.
+    let inverse = done["results"][0]["inverse"].clone();
+    assert!(inverse.is_object(), "{done}");
+    let undo = serde_json::json!({ "schema": 1, "client_op_id": "w-2", "ops": [inverse] });
+    let (status, undone) = post_ops(&hub, &token, &undo).await;
+    assert_eq!(status, 200, "{undone}");
+    assert_eq!(undone["ok"], true, "{undone}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+
+    // The operations of the waivers are not served.
+    let waive = serde_json::json!({ "ops": [{ "op": "waive", "id": "WW-01", "reason": "x" }] });
+    assert_eq!(post_ops(&hub, &token, &waive).await.0, 400);
+    let _ = std::fs::remove_dir_all(&base);
+}
