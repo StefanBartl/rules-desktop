@@ -3,6 +3,6 @@
 # (read) and `rules-ops/1` (write), see rules-export.d.ts in rules.nvim.
 # Both checkouts are pinned by commit; CI reads `commit` and `lib_commit`.
 repo       = https://github.com/StefanBartl/rules.nvim
-commit     = cff227e4e9275a57af38b610cd06699629fceb26
+commit     = 62d2f4dff56228529f6e2b5203500dff40437ff8
 lib_repo   = https://github.com/StefanBartl/lib.nvim
-lib_commit = 247e6108ae7f112c7577304f50803fef7fe947ca
+lib_commit = 78c5cacb77694693c1311026ca8ae4b36bd3ae04
