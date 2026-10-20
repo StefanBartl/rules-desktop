@@ -21,6 +21,6 @@
     "vitest": "^5.0.3"
   },
   "dependencies": {
-    "appkit-ui": "github:StefanBartl/appkit#v0.11.0&path:ui-kit"
+    "appkit-ui": "github:StefanBartl/appkit#v0.12.1&path:ui-kit"
   }
 }
