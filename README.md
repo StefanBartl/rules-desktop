@@ -72,6 +72,10 @@ rules-hub install [--autostart] [--shortcut]
 rules-hub uninstall [--purge-settings]
 ```
 
+To install the latest build for your user (no administrator rights), run `scripts\install.ps1` in your own
+PowerShell: `.\scripts\install.ps1 -Rolling -Autostart -Shortcut` (the rolling build of `main`; without a published
+release it is taken by itself).
+
 It needs a Neovim (0.12 or newer), a rules.nvim checkout and the rules vault: `RULES_NVIM`,
 `RULES_ENGINE_DIR` (else `$REPOS_DIR/rules.nvim`) and `RULES_VAULT`, or the same as keys of
 `config.json` in the config folder (`%APPDATA%\rules-desktop`, `~/.config/rules-desktop`;
