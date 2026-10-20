@@ -460,6 +460,10 @@ test('a change that met another version is not written until the person chooses,
   expect(readFileSync(file, 'utf8')).toContain('severity: recommended');
   expect(readFileSync(file, 'utf8')).toContain('changed elsewhere');
 
+  // Escape in the list does not lose the changes; the person decides with a button.
+  await page.keyboard.press('Escape');
+  await expect(center).toBeVisible();
+
   // The person writes the change onto the new version: their line changes, the other change stays.
   await center.getByRole('button', { name: 'Write my change onto the new version' }).click();
   await expect(center).toHaveCount(0);

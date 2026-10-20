@@ -937,9 +937,17 @@ export class App {
   /** Say what came of a write in one notice; a conflict is also kept for the conflict center. */
   private reportWrite(outcome: Outcome, undoable: boolean): void {
     const first = outcome.conflicts[0];
-    this.conflicts = outcome.conflicts;
-    this.conflictRule = null;
-    this.conflictRules = {};
+    // The conflicts that are still waiting stay (writing one of them again must not lose the others); a newer
+    // refusal of the same rule replaces the older.
+    const waiting = this.conflicts.filter((c) => !outcome.conflicts.some((n) => n.id === c.id));
+    this.conflicts = [...outcome.conflicts, ...waiting];
+    const kept: Record<string, Body> = {};
+    for (const c of waiting) {
+      const rule = this.conflictRules[c.id];
+      if (rule) kept[c.id] = rule;
+    }
+    this.conflictRules = kept;
+    this.conflictRule = this.conflict ? (this.conflictRules[this.conflict.id] ?? null) : null;
     if (first) {
       for (const conflict of outcome.conflicts) if (!isWaiverOp(conflict.op)) void this.readConflictRule(conflict.id);
       this.notice = isWaiverOp(first.op)

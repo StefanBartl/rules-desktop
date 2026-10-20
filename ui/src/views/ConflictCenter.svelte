@@ -36,10 +36,15 @@
     })),
   );
 
-  /** Escape and the close button drop what is asked: the first conflict in the single mode, all of them in the list. */
+  /** The close button drops what is asked: the first conflict in the single mode, all of them in the list. */
   function drop(): void {
     if (app.conflictMode === 'single') void app.resolveConflict('drop');
     else app.clearAllConflicts();
+  }
+
+  /** Escape drops the one conflict in front of the person; with a list it drops nothing (a key press must not lose them all). */
+  function cancel(): void {
+    if (app.conflictMode === 'single') void app.resolveConflict('drop');
   }
 </script>
 
@@ -50,6 +55,7 @@
   onmode={(mode) => app.setConflictMode(mode)}
   onaction={(key, action) => app.resolveConflict(action as 'retry' | 'view' | 'drop', key)}
   onclose={drop}
+  oncancel={cancel}
   show={shownText}
   labels={{
     title: t('conflict.label'),

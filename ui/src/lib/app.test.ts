@@ -772,6 +772,18 @@ describe('the conflicts, all at once or one at a time', () => {
     expect(s.app.conflictRule).toBeNull();
   });
 
+  it('keeps the other conflicts of the list when one is written again and goes through', async () => {
+    const s = await ready();
+    s.fake.opsAnswer = two;
+    await s.app.write([change, { ...change, id: 'DEP-01' }]);
+    s.fake.opsAnswer = (request) => ({
+      status: 200,
+      body: { kind: 'rules.result', dry_run: request.dry_run, ok: true, results: [{ n: 1, ok: true, op: 'set', id: 'DEP-01', changed_ids: ['DEP-01'] }] },
+    });
+    await s.app.resolveConflict('retry', conflictKey(s.app.conflicts[1] as Conflict));
+    expect(s.app.conflicts.map((c) => c.id)).toEqual(['ERR-100']);
+  });
+
   it('lets every conflict go at once', async () => {
     const s = await ready();
     s.fake.opsAnswer = two;
