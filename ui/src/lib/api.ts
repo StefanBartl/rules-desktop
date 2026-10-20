@@ -3,26 +3,14 @@
 
 import type { NextId, Result, Rule, Rulesets, Snapshot, Waivers } from './contract';
 import type { OpsRequest } from './write';
+import { ApiError, failure, HubClient, textOf, type Hello, type SnapshotResult as KitSnapshotResult } from 'appkit-ui/client';
 
 /** Where the routes of this app live (`IDENTITY.route` of rules-hub). */
 export const API = '/api/rules';
 
-export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-/** `GET /api/rules/hello` of the core: the hub and whether its engine is ready. Readable without a session. */
-export interface Hello {
-  instance: string;
-  version: string;
-  engine: { ready: boolean; problem: string | null; capabilities: string[] | null };
-}
+// The transport (the bearer token, the refusal, the pairing code, hello, the snapshot with its tag, rescan) is the
+// kit's; this file is the routes of the rules.
+export { ApiError, failure, type Hello };
 
 /** `GET /api/rules/about`: the build and the engine that answers (only the three words of its `hello`). */
 export interface About {
@@ -81,98 +69,14 @@ export interface SearchResult {
   hits: SearchHit[];
 }
 
-export type SnapshotResult = { kind: 'fresh'; doc: Snapshot; etag: string | null } | { kind: 'not_modified' };
+export type SnapshotResult = KitSnapshotResult<Snapshot>;
 
 /** Hits asked for at most. */
 export const SEARCH_LIMIT = 50;
 
-const PLAIN: Pick<RequestInit, 'cache' | 'credentials' | 'referrerPolicy'> = {
-  cache: 'no-store',
-  credentials: 'omit',
-  referrerPolicy: 'no-referrer',
-};
-
-export class Hub {
-  private token: string | null = null;
-  /** Called when the hub says the session is gone. */
-  onUnauthorized: () => void = () => {};
-
-  constructor(
-    private readonly fetchFn: typeof fetch,
-    private readonly base: string = '',
-  ) {}
-
-  setToken(token: string | null): void {
-    this.token = token;
-  }
-
-  get hasToken(): boolean {
-    return this.token !== null;
-  }
-
-  /** The session token, for the request the stream reader makes by itself. */
-  get bearer(): string {
-    return this.token ?? '';
-  }
-
-  url(path: string): string {
-    return this.base + path;
-  }
-
-  private async request(path: string, init: RequestInit = {}): Promise<Response> {
-    const headers = new Headers(init.headers);
-    const sent = this.token;
-    if (sent) headers.set('Authorization', `Bearer ${sent}`);
-    const response = await this.fetchFn(this.url(path), { ...init, headers, ...PLAIN });
-    // Only a refusal of the token that is still held means the session is gone: a late answer to a question asked
-    // with an older token says nothing about the new one.
-    if (response.status === 401 && this.token === sent) this.onUnauthorized();
-    return response;
-  }
-
-  private async json<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await this.request(path, init);
-    if (!response.ok) throw await failure(response);
-    return (await response.json()) as T;
-  }
-
-  async hello(): Promise<Hello> {
-    const doc = await this.json<{
-      instance: string;
-      version: string;
-      engine: { ready: boolean; problem: string | null; capabilities?: string[] | null };
-    }>(`${API}/hello`);
-    return {
-      instance: doc.instance,
-      version: doc.version,
-      engine: { ready: doc.engine.ready, problem: doc.engine.problem, capabilities: doc.engine.capabilities ?? null },
-    };
-  }
-
-  /** Trade a pairing code for a session token. */
-  async exchange(code: string): Promise<string> {
-    const response = await this.fetchFn(this.url('/auth/exchange'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
-      ...PLAIN,
-    });
-    if (!response.ok) throw await failure(response);
-    const doc = (await response.json()) as { token?: unknown };
-    if (typeof doc.token !== 'string') throw new ApiError(502, 'bad_reply', 'no token');
-    return doc.token;
-  }
-
-  /** The snapshot; with the tag of the one held, a 304 says it is still the current one. */
-  async snapshot(etag: string | null): Promise<SnapshotResult> {
-    const headers: Record<string, string> = {};
-    if (etag) headers['If-None-Match'] = `"${etag}"`;
-    const response = await this.request(`${API}/snapshot`, { headers });
-    if (response.status === 304) return { kind: 'not_modified' };
-    if (!response.ok) throw await failure(response);
-    const raw = response.headers.get('etag');
-    const tag = raw ? raw.replace(/^W\//, '').replace(/^"|"$/g, '') : null;
-    return { kind: 'fresh', doc: (await response.json()) as Snapshot, etag: tag };
+export class Hub extends HubClient<Snapshot> {
+  constructor(fetchFn: typeof fetch, base: string = '') {
+    super(fetchFn, API, base);
   }
 
   /** One rule with its text. A `signal` that aborts drops the request. */
@@ -190,24 +94,9 @@ export class Hub {
     return this.json<SearchResult>(path, signal ? { signal } : undefined);
   }
 
-  /** Ask the hub to look at the files again (the window got the focus back). */
-  async rescan(): Promise<void> {
-    const response = await this.request(`${API}/rescan`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    });
-    if (!response.ok) throw await failure(response);
-  }
-
   /** Show the file of a rule in Neovim, at its line (the hub starts the editor on its own machine). */
-  async open(id: string): Promise<void> {
-    const response = await this.request(`${API}/open`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
-    });
-    if (!response.ok) throw await failure(response);
+  open(id: string): Promise<void> {
+    return this.post(`${API}/open`, { id });
   }
 
   /**
@@ -216,24 +105,15 @@ export class Hub {
    * failed is told per operation in the document, which the page reads (`write.ts`).
    */
   async ops(request: OpsRequest): Promise<Result> {
-    return this.json<Result>(`${API}/ops`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    });
+    return this.postJson<Result>(`${API}/ops`, request);
   }
 
   /**
    * Set the class of a key of `sources.json`, take the key away (`class` null), or do the same for the default. The
    * hub refuses a change that releases more than before (`confirm_needed`, 409) until `confirm_loosen` is true.
    */
-  async setClass(change: ClassChange): Promise<void> {
-    const response = await this.request(`${API}/sources/class`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(change),
-    });
-    if (!response.ok) throw await failure(response);
+  setClass(change: ClassChange): Promise<void> {
+    return this.post(`${API}/sources/class`, change);
   }
 
   /** The waivers of the project of this device; a 409 `no_project` when the person set none. */
@@ -255,7 +135,7 @@ export class Hub {
   /** What this build is and which engine answers: only the words the page shows are taken. */
   async about(): Promise<About> {
     const doc = await this.json<Record<string, unknown>>(`${API}/about`);
-    const text = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+    const text = textOf;
     const engine = doc['engine'];
     const part = (key: string): string | null => text((engine as Record<string, unknown>)[key]);
     return {
@@ -268,23 +148,4 @@ export class Hub {
       engineProblem: text(doc['engine_problem']),
     };
   }
-
-  /** The address of the event stream. */
-  get eventsUrl(): string {
-    return this.url(`${API}/events`);
-  }
-}
-
-/** The refusal of the hub as an error: its code and message, or the status when the body is not the hub's. */
-export async function failure(response: Response): Promise<ApiError> {
-  let code = 'http_error';
-  let message = `HTTP ${response.status}`;
-  try {
-    const doc = (await response.json()) as { error?: { code?: unknown; message?: unknown } };
-    if (typeof doc.error?.code === 'string') code = doc.error.code;
-    if (typeof doc.error?.message === 'string') message = doc.error.message;
-  } catch {
-    // not JSON: keep the generic words
-  }
-  return new ApiError(response.status, code, message);
 }
