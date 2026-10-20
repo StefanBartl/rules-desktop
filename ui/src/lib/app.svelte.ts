@@ -3,12 +3,13 @@
 // `prefs` holds the language, the theme, the single-key switch and the frecency of actions, `session` the token.
 
 import { takePairingCode, type HistoryLike, type LocationLike } from 'appkit-ui/pair';
-import { backoffSeconds, readStream, StreamRefused, type SseMessage } from 'appkit-ui/sse';
+import { Preferences, StreamSession } from 'appkit-ui/session';
+import type { SseMessage } from 'appkit-ui/sse';
 import { ApiError, type ClassChange, type Hub, type HubSources } from './api';
 import type { Rule, RuleSummary, Rulesets, Snapshot, Waivers } from './contract';
 import { familyRows, type FamilyRow } from './families';
 import { applyFilter, emptyFilter, moveSelection, type Filter } from './filter';
-import { detectLang, isLang, type Key, type Lang } from './i18n';
+import { LANGS, type Key, type Lang } from './i18n';
 import { DEFAULT_CONFLICT_MODE, parseConflictMode, type ConflictMode } from 'appkit-ui/conflicts';
 import { bumped, parseFrecency, type Frecency, type PaletteItem } from 'appkit-ui/palette';
 import type { Command } from './keys';
@@ -142,11 +143,26 @@ export class App {
   problem = $state<string | null>(null);
   /** The pairing code of the address was refused and the tab has no session. */
   pairRefused = $state(false);
-  connection = $state<Connection>('offline');
   view = $state<View>('overview');
-  lang = $state<Lang>('en');
-  theme = $state<Theme>('auto');
-  shortcuts = $state(true);
+  /** What the person chose for the whole page (the kit's `Preferences`): the language, the theme, the single keys. */
+  readonly prefs: Preferences<Lang>;
+  /** The connection to the hub, and the event stream (the kit's `StreamSession`). */
+  readonly stream = new StreamSession();
+  get lang(): Lang {
+    return this.prefs.lang;
+  }
+  get theme(): Theme {
+    return this.prefs.theme;
+  }
+  get shortcuts(): boolean {
+    return this.prefs.shortcuts;
+  }
+  get connection(): Connection {
+    return this.stream.connection;
+  }
+  set connection(value: Connection) {
+    this.stream.connection = value;
+  }
 
   snapshot = $state.raw<Snapshot | null>(null);
   etag = $state<string | null>(null);
@@ -164,10 +180,14 @@ export class App {
   searchFocus = $state(0);
   frecency = $state.raw<Frecency>({});
 
-  private stopped = false;
+  /** The page was stopped (the kit's `StreamSession` knows). */
+  private get stopped(): boolean {
+    return this.stream.stopped;
+  }
   /** The event stream is open; only the stream says `live`. */
-  private streamOpen = false;
-  private abort: AbortController | null = null;
+  private get streamOpen(): boolean {
+    return this.stream.open;
+  }
   private detailAbort: AbortController | null = null;
   private searchAbort: AbortController | null = null;
   private searchSeq = 0;
@@ -177,11 +197,7 @@ export class App {
   private dirty = false;
 
   constructor(private readonly env: Env) {
-    const lang = safe(() => env.prefs.getItem(PREF_KEYS.lang));
-    this.lang = isLang(lang) ? lang : detectLang(env.preferredLanguages);
-    const theme = safe(() => env.prefs.getItem(PREF_KEYS.theme));
-    this.theme = theme === 'light' || theme === 'dark' ? theme : 'auto';
-    this.shortcuts = safe(() => env.prefs.getItem(PREF_KEYS.shortcuts)) !== 'off';
+    this.prefs = new Preferences<Lang>(env.prefs, PREF_KEYS, LANGS, env.preferredLanguages, 'en');
     // Only actions are remembered: a key that is not one is not read back, so a rule id never comes back from the profile.
     this.frecency = parseFrecency(safe(() => env.prefs.getItem(PREF_KEYS.frecency)), ['action:']);
     this.conflictMode = parseConflictMode(safe(() => env.prefs.getItem(PREF_KEYS.conflictMode)));
@@ -212,18 +228,15 @@ export class App {
   // ── settings ──────────────────────────────────────────────────────────
 
   setLang(lang: Lang): void {
-    this.lang = lang;
-    safe(() => this.env.prefs.setItem(PREF_KEYS.lang, lang));
+    this.prefs.setLang(lang);
   }
 
   setTheme(theme: Theme): void {
-    this.theme = theme;
-    safe(() => this.env.prefs.setItem(PREF_KEYS.theme, theme));
+    this.prefs.setTheme(theme);
   }
 
   setShortcuts(on: boolean): void {
-    this.shortcuts = on;
-    safe(() => this.env.prefs.setItem(PREF_KEYS.shortcuts, on ? 'on' : 'off'));
+    this.prefs.setShortcuts(on);
   }
 
   setView(view: View): void {
@@ -239,7 +252,7 @@ export class App {
 
   /** Bring the page up. `code` is a pairing code taken from the address. */
   async start(code: string | null): Promise<void> {
-    this.stopped = false;
+    this.stream.resume();
     this.phase = 'starting';
     this.pairRefused = false;
     let token = safe(() => this.env.session.getItem(TOKEN_KEY));
@@ -303,8 +316,7 @@ export class App {
   }
 
   stop(): void {
-    this.stopped = true;
-    this.abort?.abort();
+    this.stream.stop();
     this.detailAbort?.abort();
     this.searchAbort?.abort();
   }
@@ -312,7 +324,7 @@ export class App {
   private lostSession(): void {
     safe(() => this.env.session.removeItem(TOKEN_KEY));
     this.env.hub.setToken(null);
-    this.abort?.abort();
+    this.stream.cut();
     this.detailAbort?.abort();
     this.phase = 'needs_pairing';
     this.connection = 'offline';
@@ -405,40 +417,18 @@ export class App {
 
   // ── the stream ────────────────────────────────────────────────────────
 
-  private async followStream(): Promise<void> {
-    let attempt = 0;
-    while (!this.stopped && this.env.hub.hasToken) {
-      this.abort = new AbortController();
-      try {
-        await readStream(
-          this.env.fetchFn,
-          this.env.hub.eventsUrl,
-          this.env.hub.bearer,
-          {
-            onOpen: () => {
-              attempt = 0;
-              this.streamOpen = true;
-              this.connection = 'live';
-              // What happened while the stream was down.
-              void this.refresh();
-            },
-            onMessage: (m) => void this.onMessage(m),
-          },
-          this.abort.signal,
-        );
-      } catch (error) {
-        if (this.stopped) return;
-        if (error instanceof StreamRefused && error.status === 401) {
-          this.lostSession();
-          return;
-        }
-      } finally {
-        this.streamOpen = false;
-      }
-      if (this.stopped || !this.env.hub.hasToken) return;
-      this.connection = 'reconnecting';
-      await this.env.sleep(backoffSeconds(attempt++) * 1000);
-    }
+  private followStream(): Promise<void> {
+    return this.stream.follow({
+      fetchFn: this.env.fetchFn,
+      url: () => this.env.hub.eventsUrl,
+      bearer: () => this.env.hub.bearer,
+      hasToken: () => this.env.hub.hasToken,
+      sleep: (ms) => this.env.sleep(ms),
+      // What happened while the stream was down.
+      onOpen: () => void this.refresh(),
+      onMessage: (m) => void this.onMessage(m),
+      onLost: () => this.lostSession(),
+    });
   }
 
   /** One event of the stream. Returns when what it asked for is read (the tests wait for it). */
