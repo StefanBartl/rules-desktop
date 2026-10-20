@@ -4,7 +4,7 @@
 import { VIEWS, type App, type Theme } from './app.svelte';
 import { isActive } from './filter';
 import { translate, type Key } from './i18n';
-import type { PaletteAction } from './palette';
+import type { PaletteAction } from 'appkit-ui/palette';
 
 const THEMES: readonly Theme[] = ['auto', 'light', 'dark'];
 

@@ -1,59 +1,22 @@
 <script lang="ts">
   // One line for what happened that the page cannot show in place (the engine is gone, the classes could not be
-  // read, a rule left the rule set). The status region stands from the start so that a screen reader hears it.
+  // read, a rule left the rule set). The toast and its live regions are the kit's.
+  import KitToast from 'appkit-ui/Toast.svelte';
   import type { App } from '../lib/app.svelte';
   import { translate, type Key } from '../lib/i18n';
 
   let { app }: { app: App } = $props();
   const t = (key: Key, params: Record<string, string | number> = {}) => translate(app.lang, key, params);
   const notice = $derived(app.notice);
+  const message = $derived(
+    notice ? { kind: 'warn' as const, text: t(notice.key, notice.params ?? {}), undo: !!notice.undo } : null,
+  );
 </script>
 
-<div class="toasts" role="status" aria-live="polite">
-  {#if notice}
-    <div class="toast">
-      <span>{t(notice.key, notice.params ?? {})}</span>
-      {#if notice.undo}
-        <button type="button" class="undo" onclick={() => void app.undo()}>{t('write.undo')}</button>
-      {/if}
-      <button type="button" class="close" aria-label={t('detail.close')} onclick={() => app.dismissNotice()}>×</button>
-    </div>
-  {/if}
-</div>
-
-<style>
-  .toasts {
-    position: fixed;
-    left: 1rem;
-    bottom: 1rem;
-    z-index: 30;
-    max-width: min(34rem, calc(100vw - 2rem));
-  }
-  .toast {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-left: 4px solid var(--warn);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow);
-    padding: 0.5rem 0.75rem;
-  }
-  .undo {
-    background: none;
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    color: var(--accent);
-    cursor: pointer;
-    padding: 0.1rem 0.5rem;
-  }
-  .close {
-    background: none;
-    border: 0;
-    color: var(--muted);
-    cursor: pointer;
-    font-size: 1.1rem;
-    line-height: 1;
-  }
-</style>
+<KitToast
+  toast={message}
+  busy={app.writing}
+  onundo={() => app.undo()}
+  ondismiss={() => app.dismissNotice()}
+  labels={{ undo: t('write.undo'), dismiss: t('detail.close') }}
+/>

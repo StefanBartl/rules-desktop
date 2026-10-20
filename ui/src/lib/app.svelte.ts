@@ -9,8 +9,9 @@ import type { Rule, RuleSummary, Rulesets, Snapshot, Waivers } from './contract'
 import { familyRows, type FamilyRow } from './families';
 import { applyFilter, emptyFilter, moveSelection, type Filter } from './filter';
 import { detectLang, isLang, type Key, type Lang } from './i18n';
+import { DEFAULT_CONFLICT_MODE, parseConflictMode, type ConflictMode } from 'appkit-ui/conflicts';
+import { bumped, parseFrecency, type Frecency, type PaletteItem } from 'appkit-ui/palette';
 import type { Command } from './keys';
-import { bumped, parseFrecency, type Frecency, type PaletteItem } from './palette';
 import { classOf, sourceIndex } from './sources';
 import { retryOp } from './conflicts';
 import type { Body } from './edit';
@@ -58,6 +59,11 @@ export type Detail =
   | { state: 'ok'; id: string; doc: Rule }
   | { state: 'failed'; id: string };
 
+/** The key of a conflict: the place of its operation in the request and the rule, unique within one answer. */
+export function conflictKey(conflict: Conflict): string {
+  return `${conflict.n}:${conflict.id}`;
+}
+
 /** One line for the toast: a key of the dictionary and its values. */
 export interface Notice {
   key: Key;
@@ -85,6 +91,7 @@ export const PREF_KEYS = {
   theme: 'rules-desktop.theme',
   shortcuts: 'rules-desktop.shortcuts',
   frecency: 'rules-desktop.frecency',
+  conflictMode: 'rules-desktop.conflict-mode',
 } as const;
 
 /** The pause before the text of the rules is searched for the words typed, and the fewest letters searched for. */
@@ -175,7 +182,9 @@ export class App {
     const theme = safe(() => env.prefs.getItem(PREF_KEYS.theme));
     this.theme = theme === 'light' || theme === 'dark' ? theme : 'auto';
     this.shortcuts = safe(() => env.prefs.getItem(PREF_KEYS.shortcuts)) !== 'off';
-    this.frecency = parseFrecency(safe(() => env.prefs.getItem(PREF_KEYS.frecency)));
+    // Only actions are remembered: a key that is not one is not read back, so a rule id never comes back from the profile.
+    this.frecency = parseFrecency(safe(() => env.prefs.getItem(PREF_KEYS.frecency)), ['action:']);
+    this.conflictMode = parseConflictMode(safe(() => env.prefs.getItem(PREF_KEYS.conflictMode)));
   }
 
   // ── derived ───────────────────────────────────────────────────────────
@@ -649,32 +658,35 @@ export class App {
   /** Run a command of the keyboard (`keys.ts`). */
   command(command: Command): void {
     if (this.phase !== 'ready') return;
-    switch (command.kind) {
+    switch (command.name) {
       case 'palette':
         this.paletteOpen = true;
         return;
-      case 'view':
-        this.view = command.view;
+      case 'go':
+        if (VIEWS.includes(command.arg as View)) this.view = command.arg as View;
         return;
       case 'search':
         this.view = 'rules';
         this.searchFocus += 1;
         return;
-      case 'move':
+      case 'next':
+      case 'previous': {
+        const delta = command.name === 'next' ? 1 : -1;
         if (this.view === 'rules') {
           this.selectedId = moveSelection(
             this.shown.map((r) => r.id),
             this.selectedId,
-            command.delta,
+            delta,
           );
         } else if (this.view === 'families') {
           this.selectedFamily = moveSelection(
             this.families.map((f) => f.family),
             this.selectedFamily,
-            command.delta,
+            delta,
           );
         }
         return;
+      }
       case 'open':
         if (this.view === 'rules' && this.selectedId !== null) void this.openDetail(this.selectedId);
         else if (this.view === 'families' && this.selectedFamily !== null) this.openFamily(this.selectedFamily);
@@ -700,12 +712,12 @@ export class App {
   /** Run what was chosen in the palette. Only an action is remembered; a rule is opened and forgotten. */
   async choose(item: PaletteItem): Promise<void> {
     this.paletteOpen = false;
-    if (item.kind === 'rule') {
+    if (item.kind === 'entry') {
       this.view = 'rules';
       await this.openDetail(item.id);
       return;
     }
-    this.frecency = bumped(this.frecency, item.action.key, this.env.now());
+    this.frecency = bumped(this.frecency, item.key, this.env.now());
     safe(() => this.env.prefs.setItem(PREF_KEYS.frecency, JSON.stringify(this.frecency)));
     await item.action.run();
   }
@@ -733,6 +745,10 @@ export class App {
   conflicts = $state.raw<Conflict[]>([]);
   /** The rule as the file has it now, for the first conflict (read when the conflict arrived). */
   conflictRule = $state.raw<Body | null>(null);
+  /** The same for every conflict, by the id of the rule: the list of the conflict center compares each one. */
+  conflictRules = $state.raw<Record<string, Body>>({});
+  /** How the conflict center shows the conflicts: every one in a list (the default), or one at a time. */
+  conflictMode = $state<ConflictMode>(DEFAULT_CONFLICT_MODE);
 
   get conflict(): Conflict | null {
     return this.conflicts[0] ?? null;
@@ -923,8 +939,9 @@ export class App {
     const first = outcome.conflicts[0];
     this.conflicts = outcome.conflicts;
     this.conflictRule = null;
+    this.conflictRules = {};
     if (first) {
-      if (!isWaiverOp(first.op)) void this.readConflictRule(first.id);
+      for (const conflict of outcome.conflicts) if (!isWaiverOp(conflict.op)) void this.readConflictRule(conflict.id);
       this.notice = isWaiverOp(first.op)
         ? { key: 'write.conflict_waivers' }
         : { key: 'write.conflict', params: { id: first.id } };
@@ -961,33 +978,52 @@ export class App {
   private async readConflictRule(id: string): Promise<void> {
     try {
       const doc = await this.env.hub.rule(id);
+      // A rule that was read after its conflict went is not kept.
+      if (!this.conflicts.some((c) => c.id === id)) return;
+      this.conflictRules = { ...this.conflictRules, [id]: doc.rule };
       if (this.conflict?.id === id) this.conflictRule = doc.rule;
     } catch {
       // The rule may be gone: the conflict center then shows only what was asked.
     }
   }
 
-  /** Forget the first conflict (the person looked at it or went on); the next one, if any, comes up. */
-  clearConflict(): void {
-    this.conflicts = this.conflicts.slice(1);
-    this.conflictRule = null;
+  /** Forget a conflict (the first by default: the person looked at it or went on); the next one, if any, comes up. */
+  clearConflict(key?: string): void {
+    const target = key === undefined ? this.conflict : this.conflicts.find((c) => conflictKey(c) === key);
+    if (!target) return;
+    this.conflicts = this.conflicts.filter((c) => c !== target);
     const next = this.conflict;
-    if (next && !isWaiverOp(next.op)) void this.readConflictRule(next.id);
+    this.conflictRule = next ? (this.conflictRules[next.id] ?? null) : null;
+    if (next && !isWaiverOp(next.op) && !(next.id in this.conflictRules)) void this.readConflictRule(next.id);
+  }
+
+  /** Let every conflict go. */
+  clearAllConflicts(): void {
+    this.conflicts = [];
+    this.conflictRule = null;
+    this.conflictRules = {};
+    if (this.notice?.key === 'write.conflict') this.notice = null;
+  }
+
+  /** The way the conflict center shows its conflicts, kept in this browser. */
+  setConflictMode(mode: ConflictMode): void {
+    this.conflictMode = mode;
+    safe(() => this.env.prefs.setItem(PREF_KEYS.conflictMode, mode));
   }
 
   /**
    * What the person chose for the first conflict: write the same change onto the version the file has now (their
    * decision to write over the other change), look at the rule as it is, or drop their change.
    */
-  async resolveConflict(choice: 'retry' | 'view' | 'drop'): Promise<void> {
-    const conflict = this.conflict;
+  async resolveConflict(choice: 'retry' | 'view' | 'drop', key?: string): Promise<void> {
+    const conflict = key === undefined ? this.conflict : this.conflicts.find((c) => conflictKey(c) === key);
     if (!conflict) return;
     if (choice === 'retry') {
       const op = retryOp(conflict);
-      this.clearConflict();
+      this.clearConflict(key);
       if (op) await this.write([op]);
     } else if (choice === 'view') {
-      this.clearConflict();
+      this.clearConflict(key);
       if (isWaiverOp(conflict.op)) {
         this.view = 'waivers';
         await this.loadWaivers();
@@ -996,7 +1032,7 @@ export class App {
         await this.openDetail(conflict.id);
       }
     } else {
-      this.clearConflict();
+      this.clearConflict(key);
     }
     if (this.notice?.key === 'write.conflict') this.notice = null;
   }

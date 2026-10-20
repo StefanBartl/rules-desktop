@@ -1,8 +1,11 @@
 <script lang="ts">
-  // The conflict center: a change that met another version of the file is never written over. The page shows what
-  // was changed next to what the file says now, and the person chooses: write the change onto the new version (their
-  // decision to overwrite the other change), look at the rule, or drop their change. Nothing is merged for them.
-  import type { App } from '../lib/app.svelte';
+  // The conflict center: a change that met another version of the file is never written over. The dialog is the kit's
+  // (every conflict in a list, or one at a time, as the person chooses); this file words each conflict - what was
+  // changed next to what the file says now - and names what can be done: write the change onto the new version (their
+  // decision to overwrite the other change), look at the rule, or drop the change. Nothing is merged for them.
+  import KitConflictCenter from 'appkit-ui/ConflictCenter.svelte';
+  import type { ConflictItem } from 'appkit-ui/conflicts';
+  import { conflictKey, type App } from '../lib/app.svelte';
   import { retryOp, rowsOf } from '../lib/conflicts';
   import { translate, type Key } from '../lib/i18n';
   import { shownText } from '../lib/ruletext';
@@ -11,113 +14,54 @@
   let { app }: { app: App } = $props();
   const t = (key: Key, params: Record<string, string | number> = {}) => translate(app.lang, key, params);
 
-  let dialog: HTMLDialogElement | undefined = $state();
-  const conflict = $derived(app.conflict);
-  const rows = $derived(conflict ? rowsOf(conflict.op, app.conflictRule) : []);
-  const canRetry = $derived(conflict ? retryOp(conflict) !== null : false);
+  const items = $derived(
+    app.conflicts.map((conflict): ConflictItem => ({
+      key: conflictKey(conflict),
+      title: conflict.id,
+      id: '',
+      notes: [isWaiverOp(conflict.op) ? t('conflict.hint_waivers') : t('conflict.hint', { id: shownText(conflict.id) })],
+      rows: rowsOf(conflict.op, app.conflictRules[conflict.id] ?? null).map((row) => ({
+        key: row.field,
+        label: row.field,
+        wanted: row.mine,
+        now: row.current,
+      })),
+      actions: [
+        ...(retryOp(conflict) !== null
+          ? [{ name: 'retry', label: t('conflict.retry'), primary: true, disabled: app.writing }]
+          : []),
+        { name: 'view', label: isWaiverOp(conflict.op) ? t('conflict.view_waivers') : t('conflict.view') },
+        { name: 'drop', label: t('conflict.drop') },
+      ],
+    })),
+  );
 
-  $effect(() => {
-    if (!dialog) return;
-    if (conflict && !dialog.open) dialog.showModal();
-    if (!conflict && dialog.open) dialog.close();
-  });
+  /** Escape and the close button drop what is asked: the first conflict in the single mode, all of them in the list. */
+  function drop(): void {
+    if (app.conflictMode === 'single') void app.resolveConflict('drop');
+    else app.clearAllConflicts();
+  }
 </script>
 
-<dialog
-  bind:this={dialog}
-  aria-label={t('conflict.label')}
-  oncancel={(event) => {
-    event.preventDefault();
-    void app.resolveConflict('drop');
+<KitConflictCenter
+  open={app.conflicts.length > 0}
+  {items}
+  mode={app.conflictMode}
+  onmode={(mode) => app.setConflictMode(mode)}
+  onaction={(key, action) => app.resolveConflict(action as 'retry' | 'view' | 'drop', key)}
+  onclose={drop}
+  show={shownText}
+  labels={{
+    title: t('conflict.label'),
+    intro: t('conflict.intro'),
+    field: t('conflict.field'),
+    wanted: t('conflict.mine'),
+    now: t('conflict.current'),
+    more: (n) => t('conflict.more', { n }),
+    discardAll: '',
+    close: app.conflictMode === 'single' ? t('conflict.drop') : t('conflict.drop_all'),
+    view: t('conflict.show'),
+    viewList: t('conflict.show_list'),
+    viewSingle: t('conflict.show_single'),
   }}
->
-  {#if conflict}
-    <h2>{t('conflict.label')}</h2>
-    <p>{isWaiverOp(conflict.op) ? t('conflict.hint_waivers') : t('conflict.hint', { id: shownText(conflict.id) })}</p>
-    {#if app.conflicts.length > 1}<p class="muted">{t('conflict.more', { n: app.conflicts.length - 1 })}</p>{/if}
-    {#if rows.length > 0}
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">{t('conflict.field')}</th>
-            <th scope="col">{t('conflict.mine')}</th>
-            <th scope="col">{t('conflict.current')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each rows as row (row.field)}
-            <tr>
-              <th scope="row">{row.field}</th>
-              <td><pre>{shownText(row.mine)}</pre></td>
-              <td><pre>{shownText(row.current)}</pre></td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
-    <div class="row">
-      {#if canRetry}
-        <button type="button" disabled={app.writing} onclick={() => void app.resolveConflict('retry')}>{t('conflict.retry')}</button>
-      {/if}
-      <button type="button" onclick={() => void app.resolveConflict('view')}>
-        {isWaiverOp(conflict.op) ? t('conflict.view_waivers') : t('conflict.view')}
-      </button>
-      <button type="button" onclick={() => void app.resolveConflict('drop')}>{t('conflict.drop')}</button>
-    </div>
-  {/if}
-</dialog>
-
-<style>
-  dialog {
-    background: var(--surface);
-    color: var(--text);
-    border: 1px solid var(--line);
-    border-radius: var(--radius-lg);
-    padding: 1rem 1.2rem;
-    width: min(44rem, calc(100vw - 2rem));
-  }
-  dialog::backdrop {
-    background: var(--backdrop);
-  }
-  h2 {
-    margin: 0 0 0.4rem;
-  }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 0.5rem 0;
-  }
-  th,
-  td {
-    border-bottom: 1px solid var(--line);
-    padding: 0.25rem 0.5rem;
-    text-align: left;
-    vertical-align: top;
-  }
-  pre {
-    margin: 0;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    font-family: var(--mono);
-  }
-  .row {
-    display: flex;
-    gap: 0.4rem;
-    flex-wrap: wrap;
-  }
-  .muted {
-    color: var(--muted);
-  }
-  button {
-    background: none;
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 0.15rem 0.6rem;
-    cursor: pointer;
-    color: var(--text);
-  }
-  button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-</style>
+/>

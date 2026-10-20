@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   App,
+  conflictKey,
   EXCHANGE_RETRIES,
   GONE_SETTLE_MS,
   isNavState,
@@ -12,6 +13,7 @@ import {
   TOKEN_KEY,
 } from './app.svelte';
 import { snapshotDoc } from './fixtures';
+import type { Conflict } from './write';
 import { CODE, FakeHub, TOKEN, testEnv } from './testhub';
 
 const apps: App[] = [];
@@ -361,39 +363,39 @@ describe('the search', () => {
 describe('the keyboard', () => {
   it('moves the cursor through the shown rules, opens, and closes the detail before the selection', async () => {
     const s = await ready();
-    s.app.command({ kind: 'view', view: 'rules' });
-    s.app.command({ kind: 'move', delta: 1 });
-    s.app.command({ kind: 'move', delta: 1 });
+    s.app.command({ name: 'go', arg: 'rules' });
+    s.app.command({ name: 'next' });
+    s.app.command({ name: 'next' });
     expect(s.app.selectedId).toBe('DEP-09');
     // A move reads no rule: each read is a question to the engine.
     expect(s.fake.count('/api/rules/rule')).toBe(0);
-    s.app.command({ kind: 'open' });
+    s.app.command({ name: 'open' });
     await vi.waitFor(() => expect(s.app.detail.state).toBe('ok'));
-    s.app.command({ kind: 'palette' });
-    s.app.command({ kind: 'escape' });
+    s.app.command({ name: 'palette' });
+    s.app.command({ name: 'escape' });
     expect(s.app.paletteOpen).toBe(false);
     expect(s.app.detail.state).toBe('ok');
-    s.app.command({ kind: 'escape' });
+    s.app.command({ name: 'escape' });
     expect(s.app.detail.state).toBe('none');
     expect(s.app.selectedId).toBe('DEP-09');
-    s.app.command({ kind: 'escape' });
+    s.app.command({ name: 'escape' });
     expect(s.app.selectedId).toBeNull();
   });
 
   it('opens the rules of a family from the family table', async () => {
     const s = await ready();
-    s.app.command({ kind: 'view', view: 'families' });
-    s.app.command({ kind: 'move', delta: 1 });
-    s.app.command({ kind: 'move', delta: 1 });
+    s.app.command({ name: 'go', arg: 'families' });
+    s.app.command({ name: 'next' });
+    s.app.command({ name: 'next' });
     expect(s.app.selectedFamily).toBe('ERR');
-    s.app.command({ kind: 'open' });
+    s.app.command({ name: 'open' });
     expect(s.app.view).toBe('rules');
     expect(s.app.shown.map((r) => r.id)).toEqual(['ERR-100']);
   });
 
   it('sends the search key to the search box of the rules', async () => {
     const s = await ready();
-    s.app.command({ kind: 'search' });
+    s.app.command({ name: 'search' });
     expect(s.app.view).toBe('rules');
     expect(s.app.searchFocus).toBe(1);
   });
@@ -405,7 +407,8 @@ describe('what the browser keeps', () => {
     s.app.setLang('de');
     s.app.setTheme('dark');
     s.app.setShortcuts(false);
-    await s.app.choose({ kind: 'rule', key: 'rule:LUA-01', label: 'x', hint: 'LUA-01', id: 'LUA-01', score: 1 });
+    s.app.setConflictMode('single');
+    await s.app.choose({ kind: 'entry', key: 'rule:LUA-01', label: 'x', hint: 'LUA-01', id: 'LUA-01', score: 1 });
     expect(s.app.detail).toMatchObject({ state: 'ok', id: 'LUA-01' });
     let ran = 0;
     const action = { key: 'rescan', label: 'Read again', run: () => void (ran += 1) };
@@ -420,7 +423,7 @@ describe('what the browser keeps', () => {
     }
     // A new page reads the settings back.
     const again = new App(s.env);
-    expect([again.lang, again.theme, again.shortcuts]).toEqual(['de', 'dark', false]);
+    expect([again.lang, again.theme, again.shortcuts, again.conflictMode]).toEqual(['de', 'dark', false, 'single']);
     expect(Object.keys(again.frecency)).toEqual(['action:rescan']);
   });
 });
@@ -723,6 +726,64 @@ describe('several rules at once and the conflict center', () => {
     expect(s.app.conflicts.map((c) => c.id)).toEqual(['ERR-100', 'DEP-01']);
     s.app.clearConflict();
     expect(s.app.conflict?.id).toBe('DEP-01');
+  });
+});
+
+describe('the conflicts, all at once or one at a time', () => {
+  const two = () => ({
+    status: 200,
+    body: {
+      kind: 'rules.result',
+      dry_run: false,
+      ok: false,
+      results: ['ERR-100', 'DEP-01'].map((id, i) => ({ n: i + 1, ok: false, op: 'set', id, changed_ids: [], error: { code: 'conflict', details: { expected: 'a', actual: 'b' } } })),
+    },
+  });
+  const change = { op: 'set', id: 'ERR-100', patch: { severity: 'critical' }, if_match: 'a' };
+
+  it('shows every conflict by default, and keeps the choice of the person', async () => {
+    const s = await ready();
+    expect(s.app.conflictMode).toBe('list');
+    s.app.setConflictMode('single');
+    expect(s.prefs.items.get(PREF_KEYS.conflictMode)).toBe('single');
+    s.prefs.items.set(PREF_KEYS.conflictMode, '<img src=x>');
+    expect(new App(s.env).conflictMode).toBe('list');
+  });
+
+  it('reads the rule of every conflict, so the list compares each one', async () => {
+    const s = await ready();
+    s.fake.opsAnswer = two;
+    await s.app.write([change, { ...change, id: 'DEP-01' }]);
+    await vi.waitFor(() => expect(Object.keys(s.app.conflictRules).sort()).toEqual(['DEP-01', 'ERR-100']));
+  });
+
+  it('deals with the conflict of its key and leaves the others, and the first stays first by default', async () => {
+    const s = await ready();
+    s.fake.opsAnswer = two;
+    await s.app.write([change, { ...change, id: 'DEP-01' }]);
+    const second = conflictKey(s.app.conflicts[1] as Conflict);
+    await s.app.resolveConflict('drop', second);
+    expect(s.app.conflicts.map((c) => c.id)).toEqual(['ERR-100']);
+    // A key that is not there does nothing.
+    await s.app.resolveConflict('drop', second);
+    expect(s.app.conflicts).toHaveLength(1);
+    s.app.clearConflict(conflictKey(s.app.conflicts[0] as Conflict));
+    expect(s.app.conflicts).toHaveLength(0);
+    expect(s.app.conflictRule).toBeNull();
+  });
+
+  it('lets every conflict go at once', async () => {
+    const s = await ready();
+    s.fake.opsAnswer = two;
+    await s.app.write([change, { ...change, id: 'DEP-01' }]);
+    s.app.clearAllConflicts();
+    expect(s.app.conflicts).toHaveLength(0);
+    expect(s.app.conflictRules).toEqual({});
+    expect(s.app.notice).toBeNull();
+    // A rule that is read after its conflict went is not kept.
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(s.app.conflictRules).toEqual({});
   });
 });
 

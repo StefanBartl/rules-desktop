@@ -6,7 +6,8 @@
   import { installNav } from 'appkit-ui/nav';
   import { isNavState, VIEWS, type App, type NavState, type Theme } from './lib/app.svelte';
   import { LANGS, translate, type Key, type Lang } from './lib/i18n';
-  import { commandFor, type ChordState } from './lib/keys';
+  import { resolveKey } from 'appkit-ui/keymap';
+  import { keymap, type ChordState } from './lib/keys';
   import Detail from './views/Detail.svelte';
   import Families from './views/Families.svelte';
   import Overview from './views/Overview.svelte';
@@ -110,7 +111,8 @@
     const target = event.target instanceof HTMLElement ? event.target : null;
     const typing =
       target !== null && target.closest('input, textarea, select, [contenteditable="true"], [role="menu"], dialog') !== null;
-    const result = commandFor(
+    const result = resolveKey(
+      keymap,
       {
         key: event.key,
         ctrlKey: event.ctrlKey,
@@ -126,7 +128,7 @@
     chord = result.chord;
     if (result.command === null) return;
     // Enter on a button or a link is that control's own; only the list and the table take it as "open".
-    if (result.command.kind === 'open' && target?.closest('button, a, summary') != null) return;
+    if (result.command.name === 'open' && target?.closest('button, a, summary') != null) return;
     event.preventDefault();
     app.command(result.command);
   }
