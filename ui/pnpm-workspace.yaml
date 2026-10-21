@@ -9,3 +9,10 @@ onlyBuiltDependencies: []
 # versions had. It is a build-time tool, never in the shipped bundle.
 trustPolicyExclude:
   - chokidar@4.0.3
+# One named exception to the release age, as in tasks-desktop: markdown-it 15.0.3 (2026-10-16) is the fix of
+# GHSA-gfr2-rv44-r23c (high, quadratic time on a multi-line link reference) in 15.0.0 to 15.0.2, which appkit-ui renders
+# text with. It needs argparse 3.0.3 (2026-10-15, the same maintainers; markdown-it uses it only for its command line).
+# Both versions are named exactly: a later one waits as every other package does.
+minimumReleaseAgeExclude:
+  - markdown-it@15.0.3
+  - argparse@3.0.3
