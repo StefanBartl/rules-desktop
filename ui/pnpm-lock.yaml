@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       appkit-ui:
-        specifier: github:StefanBartl/appkit#v0.15.0&path:ui-kit
-        version: https://codeload.github.com/StefanBartl/appkit/tar.gz/6595f75372c8d360b89c26833d3b58cbcc8b3160#path:ui-kit(svelte@5.57.2)
+        specifier: github:StefanBartl/appkit#v0.15.1&path:ui-kit
+        version: https://codeload.github.com/StefanBartl/appkit/tar.gz/65a4a877f52fde07e8d253a5ae3dcabcb12508e5#path:ui-kit(svelte@5.57.2)
     devDependencies:
       '@axe-core/playwright':
         specifier: ^4.13.0
@@ -211,8 +211,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  appkit-ui@https://codeload.github.com/StefanBartl/appkit/tar.gz/6595f75372c8d360b89c26833d3b58cbcc8b3160#path:ui-kit:
-    resolution: {gitHosted: true, integrity: sha512-gcpNMRzy4jYRfZZiDY2UxV6smO45rzDk4yrI/y0UV8kughs88rErX1Y3kHoCOnIss7QDSC2prYxgRQJs0nrp1g==, path: ui-kit, tarball: https://codeload.github.com/StefanBartl/appkit/tar.gz/6595f75372c8d360b89c26833d3b58cbcc8b3160}
+  appkit-ui@https://codeload.github.com/StefanBartl/appkit/tar.gz/65a4a877f52fde07e8d253a5ae3dcabcb12508e5#path:ui-kit:
+    resolution: {gitHosted: true, integrity: sha512-jOTn45l5wYFiJ9r0LIi22o7YgDc7WSXOnq6h4ndGP29CiDwi3eWbO2kptFDOuTlY46V29YTWyNUJZXbFvX83jw==, path: ui-kit, tarball: https://codeload.github.com/StefanBartl/appkit/tar.gz/65a4a877f52fde07e8d253a5ae3dcabcb12508e5}
     version: 0.0.0
     peerDependencies:
       svelte: ^5.0.0
@@ -700,7 +700,7 @@ snapshots:
 
   acorn@8.19.0: {}
 
-  appkit-ui@https://codeload.github.com/StefanBartl/appkit/tar.gz/6595f75372c8d360b89c26833d3b58cbcc8b3160#path:ui-kit(svelte@5.57.2):
+  appkit-ui@https://codeload.github.com/StefanBartl/appkit/tar.gz/65a4a877f52fde07e8d253a5ae3dcabcb12508e5#path:ui-kit(svelte@5.57.2):
     dependencies:
       markdown-it: 15.0.3
       svelte: 5.57.2
