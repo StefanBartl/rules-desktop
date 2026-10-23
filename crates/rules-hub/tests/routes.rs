@@ -206,6 +206,7 @@ async fn start_all(
             }
         },
         engine: engine.map(|e| e as Arc<dyn Engine>),
+        host: None,
         sources,
         watch,
         editor,
@@ -923,6 +924,7 @@ async fn the_page_of_a_folder_is_served_to_everybody_and_nothing_else_of_it() {
         instance: Secret::generate(CODE_BYTES).unwrap(),
         status: ready(),
         engine: None,
+        host: None,
         sources: Arc::default(),
         watch: None,
         editor: None,

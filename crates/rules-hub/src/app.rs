@@ -89,6 +89,8 @@ pub struct EngineState {
     pub status: HubStatus,
     /// Only when the engine answered `hello` as this app needs.
     pub engine: Option<Arc<dyn Engine>>,
+    /// The same engine, asked whether its persistent host runs (the texts of the search are read only then).
+    pub host: Option<Arc<dyn crate::bodies::HostProbe>>,
     /// A longer text for the terminal of whoever started the hub (it may hold paths; `hello` gets
     /// only the short code of `status`).
     pub note: Option<String>,
@@ -109,6 +111,7 @@ pub async fn engine_state(file: &FileConfig<RulesSettings>, env: &Env) -> Engine
             capabilities: Vec::new(),
         },
         engine: None,
+        host: None,
         note: Some(note),
         vault: None,
         nvim: None,
@@ -134,14 +137,16 @@ pub async fn engine_state(file: &FileConfig<RulesSettings>, env: &Env) -> Engine
     } else {
         CliEngine::with_host(cfg)
     };
-    match probe(&engine).await {
+    let engine = Arc::new(engine);
+    match probe(engine.as_ref()).await {
         Ok(info) => EngineState {
             status: HubStatus {
                 engine_ready: true,
                 problem: None,
                 capabilities: info.capabilities,
             },
-            engine: Some(Arc::new(engine)),
+            engine: Some(Arc::clone(&engine) as Arc<dyn Engine>),
+            host: Some(engine as Arc<dyn crate::bodies::HostProbe>),
             vault: Some(setup.vault.value.clone()),
             nvim: Some(setup.nvim.value.clone()),
             locate_config,
@@ -233,6 +238,7 @@ pub async fn serve(opts: ServeOptions) -> Result<(), String> {
         instance: instance.clone(),
         status: status.clone(),
         engine: state.engine.clone(),
+        host: state.host.clone(),
         sources: Arc::clone(&sources),
         editor: state
             .locate_config

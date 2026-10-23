@@ -19,6 +19,7 @@ pub mod background;
 pub mod bodies;
 pub mod editor;
 pub mod engine;
+mod indexer;
 mod live;
 pub mod locate;
 pub mod policy;
@@ -101,6 +102,9 @@ pub struct Start {
     /// The engine the routes ask; `None`: the hub is up and every data route says the engine is
     /// not ready.
     pub engine: Option<Arc<dyn Engine>>,
+    /// Whether the engine's persistent host runs: the texts of the rules are read for the search only while it
+    /// does (each is a question of its own). `None`: every question is cheap (an engine in a test), the texts are read.
+    pub host: Option<Arc<dyn bodies::HostProbe>>,
     /// The data classes of this device. The caller loads them with [`SourcePolicy::load`] before
     /// it starts the hub and must not start it when that fails (`app::serve` stops the start).
     /// The default classifies nothing.
@@ -141,12 +145,15 @@ pub async fn start(s: Start) -> std::io::Result<RunningServer> {
             // strictly, by the handler) and has the coarse limit of the writes.
             guard_rules: GuardRules::new(IDENTITY.route("hello"), [IDENTITY.route("ops")]),
             ui: Arc::new(s.ui),
-            runtime: RulesRuntime::new(s.engine, s.status, s.sources, max_age, s.watch, s.editor)
-                .with_project(s.project)
-                .with_config_dir(s.config_dir),
+            runtime: RulesRuntime::new(
+                s.engine, s.host, s.status, s.sources, max_age, s.watch, s.editor,
+            )
+            .with_project(s.project)
+            .with_config_dir(s.config_dir),
             // There is one vault and no list to choose from, so this is never called.
             build: Arc::new(move |()| {
                 RulesRuntime::new(
+                    None,
                     None,
                     HubStatus {
                         engine_ready: false,

@@ -13,14 +13,15 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::bodies::BodiesEngine;
+use crate::bodies::{BodiesEngine, HostProbe};
 use crate::editor::FileOpener;
 use crate::engine::{Calls, Engine};
+use crate::indexer::{self, Indexer};
 use crate::locate::Locate;
 use crate::sources::{SourceFile, SourcePolicy};
 use crate::store::{self, Cached, RefreshOptions, SnapshotStore, StoreOptions, SHAPE};
 use crate::watch::{self, Hint, Watcher};
-use appkit_hub::search::{self, SearchIndex};
+use appkit_hub::search::SearchIndex;
 
 /// What the hub keeps for the vault it reads.
 pub struct RulesRuntime {
@@ -205,6 +206,7 @@ impl RulesRuntime {
 
     pub(crate) fn new(
         engine: Option<Arc<dyn Engine>>,
+        host: Option<Arc<dyn HostProbe>>,
         status: HubStatus,
         sources: Arc<SourcePolicy>,
         max_age: Option<Duration>,
@@ -219,13 +221,20 @@ impl RulesRuntime {
                 ..StoreOptions::default()
             },
         );
-        // The text of the rules, for the search: asked of the engine rule by rule.
-        let search = engine
-            .clone()
-            .map(|engine| SearchIndex::new(Arc::new(BodiesEngine::new(engine)), Calls::Bodies));
+        // The text of the rules, for the search: asked of the engine rule by rule, while its host runs.
+        let indexing = engine.clone().map(|engine| {
+            let bodies = BodiesEngine::new(engine);
+            let bodies = Arc::new(match host {
+                Some(probe) => bodies.with_host(probe),
+                None => bodies,
+            });
+            let index = SearchIndex::new(Arc::clone(&bodies) as Arc<dyn Engine>, Calls::Bodies);
+            (index, bodies)
+        });
+        let search = indexing.as_ref().map(|(index, _)| Arc::clone(index));
         let mut jobs = Vec::new();
-        if let Some(index) = &search {
-            jobs.push(search::spawn_indexer(Arc::clone(index), &store));
+        if let Some((index, bodies)) = indexing {
+            jobs.push(indexer::spawn(Indexer::new(index, bodies), &store));
         }
         // The watcher only says "look again"; the refresher does the looking.
         let (mut hints, mut watcher) = (None, None);
@@ -349,7 +358,7 @@ mod tests {
             problem: None,
             capabilities: Vec::new(),
         };
-        RulesRuntime::new(None, status, Arc::new(policy), None, None, None)
+        RulesRuntime::new(None, None, status, Arc::new(policy), None, None, None)
     }
 
     #[test]

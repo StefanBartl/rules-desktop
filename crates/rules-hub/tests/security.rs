@@ -32,6 +32,7 @@ impl Subject for Rules {
             instance: cfg.instance,
             status: cfg.status,
             engine: None,
+            host: None,
             sources: Arc::default(),
             watch: None,
             editor: None,
