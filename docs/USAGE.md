@@ -91,4 +91,5 @@ Back and Forward of the browser walk through the views and the rules you opened.
 
 Variables the hub reads: `RULES_DESKTOP_PORT`, `RULES_DESKTOP_CONFIG_DIR`, `RULES_VAULT`, `RULES_NVIM`,
 `RULES_ENGINE_DIR`, `LIB_NVIM_DIR`, `RULES_HUB_UI_DIR` (a built `ui/dist` to serve instead of the one in the binary, for
-development) and `RULES_HUB_ENGINE=process` (one engine process per question instead of a persistent one).
+development) and `RULES_HUB_ENGINE=process` (one engine process per question instead of a persistent one; the search then finds
+titles only, since reading the text of every rule would be a process for each).

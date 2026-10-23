@@ -146,7 +146,12 @@ pub async fn engine_state(file: &FileConfig<RulesSettings>, env: &Env) -> Engine
                 capabilities: info.capabilities,
             },
             engine: Some(Arc::clone(&engine) as Arc<dyn Engine>),
-            host: Some(engine as Arc<dyn crate::bodies::HostProbe>),
+            // One process per question has no host: the texts of the search are not read (a process for each rule).
+            host: Some(if one_process {
+                Arc::new(crate::bodies::NoHost) as Arc<dyn crate::bodies::HostProbe>
+            } else {
+                engine as Arc<dyn crate::bodies::HostProbe>
+            }),
             vault: Some(setup.vault.value.clone()),
             nvim: Some(setup.nvim.value.clone()),
             locate_config,

@@ -36,6 +36,23 @@ pub const PAGE_TRIES: usize = 3;
 /// one rule at a time, which only a host answers cheaply.
 pub trait HostProbe: Send + Sync {
     fn host_running(&self) -> BoxFuture<'_, bool>;
+    /// Whether a question can start a host that is not running. An engine without one (one process per question)
+    /// never runs it: it is asked no `hello` for that (a whole Neovim process each time).
+    fn can_start(&self) -> bool {
+        true
+    }
+}
+
+/// The probe of an engine without a persistent host (`RULES_HUB_ENGINE=process`): the texts of the search are not read.
+pub struct NoHost;
+
+impl HostProbe for NoHost {
+    fn host_running(&self) -> BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+    fn can_start(&self) -> bool {
+        false
+    }
 }
 
 impl HostProbe for CliEngine {
@@ -182,6 +199,9 @@ impl BodiesEngine {
 
     async fn read(&self, request: &Request) -> Result<(String, Value), EngineError> {
         if !self.host_runs().await {
+            if self.host.as_ref().is_some_and(|probe| !probe.can_start()) {
+                return Err(no_host());
+            }
             // A host starts with the first question it is asked: one cheap one, so an index built before anything
             // else asked the engine still reads through a host. An engine without a host stays refused.
             let _ = self.inner.call(Calls::Hello, None).await;
@@ -587,6 +607,17 @@ pub(crate) mod tests {
         let doc = page(&e, json!({ "offset": 0, "limit": 10 })).await.unwrap();
         assert_eq!(doc["items"].as_array().unwrap().len(), 3);
         assert_eq!(fake.count("hello"), 1, "exactly one hello");
+    }
+
+    #[tokio::test]
+    async fn an_engine_that_has_no_host_at_all_is_asked_no_hello() {
+        let fake = three();
+        let e = BodiesEngine::new(Arc::clone(&fake) as Arc<dyn Engine>).with_host(Arc::new(NoHost));
+        let err = page(&e, json!({ "offset": 0, "limit": 10 }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::Spawn(_)), "{err}");
+        assert!(fake.asked().is_empty(), "{:?}", fake.asked());
     }
 
     #[tokio::test]

@@ -67,7 +67,13 @@ impl Indexer {
             .id_revs
             .iter()
             .any(|rev| Some(rev) != change.rev.as_ref());
-        if log.failed || other_state {
+        // A change that only removes reads no page: `apply` keeps the rev of the state before, so the same state coming
+        // back (a checkout and back) would be taken for one the index has, and its rules never read again.
+        let removed_only = change.changed.is_empty()
+            && change.added.is_empty()
+            && !change.removed.is_empty()
+            && !change.truncated;
+        if log.failed || other_state || removed_only {
             self.build().await;
         }
     }
@@ -166,6 +172,27 @@ mod tests {
         assert!(!indexer.stale);
         assert_eq!(finds(&indexer, "alpha new"), ["A-1"]);
         assert_eq!(finds(&indexer, "beta new"), ["A-2"]);
+    }
+
+    /// A rule goes and comes back with the state it had: the index must have it again.
+    #[tokio::test]
+    async fn a_rule_that_goes_and_comes_back_with_the_old_state_is_found_again() {
+        let fake = Fake::new(&[("A-1", "alpha old"), ("A-2", "beta old")]);
+        let mut indexer = indexer(&fake);
+        indexer.build().await;
+        *fake.rules.lock().unwrap() = vec![("A-1", "alpha old")];
+        *fake.rev.lock().unwrap() = "rev:2".to_owned();
+        let mut gone = change("rev:2", &[]);
+        gone.removed = vec!["A-2".to_owned()];
+        indexer.follow(&gone).await;
+        assert!(finds(&indexer, "beta").is_empty());
+        // Back to the first state (the rev of rules.nvim is made of the files): A-2 is added at rev:1 again.
+        *fake.rules.lock().unwrap() = vec![("A-1", "alpha old"), ("A-2", "beta old")];
+        *fake.rev.lock().unwrap() = "rev:1".to_owned();
+        let mut back = change("rev:1", &[]);
+        back.added = vec!["A-2".to_owned()];
+        indexer.follow(&back).await;
+        assert_eq!(finds(&indexer, "beta old"), ["A-2"]);
     }
 
     /// The common case reads only the named ids.
