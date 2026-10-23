@@ -13,9 +13,9 @@ repository = "https://github.com/StefanBartl/rules-desktop"
 # (ui/package.json). tools/check-appkit-pin.py checks that the tag still names the commit in Cargo.lock
 # and ui/pnpm-lock.yaml.
 [workspace.dependencies]
-appkit-core = { git = "https://github.com/StefanBartl/appkit", tag = "v0.13.1" }
-appkit-hub = { git = "https://github.com/StefanBartl/appkit", tag = "v0.13.1" }
-appkit-testkit = { git = "https://github.com/StefanBartl/appkit", tag = "v0.13.1" }
+appkit-core = { git = "https://github.com/StefanBartl/appkit", tag = "v0.14.0" }
+appkit-hub = { git = "https://github.com/StefanBartl/appkit", tag = "v0.14.0" }
+appkit-testkit = { git = "https://github.com/StefanBartl/appkit", tag = "v0.14.0" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
