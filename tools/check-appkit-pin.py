@@ -10,14 +10,16 @@ points now.
     python tools/check-appkit-pin.py [--lock Cargo.lock]
 
 Exit 0: every appkit package is pinned by a tag, all by the same tag and commit, the page pins the
-kit's folder (`appkit-ui` in ui/pnpm-lock.yaml) to that same tag and commit, and the tag names that
-commit. Exit 1: what is wrong is listed. Exit 2: the check itself could not run (git, network); that
+kit's folder (`appkit-ui` in ui/pnpm-lock.yaml) to that same tag and commit, every action of the
+kit a workflow takes (`uses: StefanBartl/appkit/release-kit/...@<sha>`) is pinned by that same
+commit, and the tag names that commit. Exit 1: what is wrong is listed. Exit 2: the check itself could not run (git, network); that
 is not a pass.
 
 For Cargo.lock what check-lock-age.py is for crates.io: the one git source of the tree.
 """
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -95,6 +97,44 @@ def ui_pin(lock_text):
     return (spec.group("tag"), version.group("sha") or version.group("sha2")), problems
 
 
+# A step of a workflow that takes an action of the kit: `uses: StefanBartl/appkit/release-kit/publish@<ref>`,
+# also quoted, in another case (GitHub does not tell owner and repository names apart by case) or from the
+# root of the repository (`StefanBartl/appkit@<ref>`).
+WORKFLOW_USES = re.compile(
+    r"""^\s*-?\s*uses:\s*["']?StefanBartl/appkit(?:/(?P<path>[^@\s"']+))?@(?P<ref>[^\s"'#]+)""",
+    re.M | re.I,
+)
+
+
+def workflow_pins(texts, sha):
+    """What is wrong with the actions of the kit the workflows take: each must be pinned by the full commit
+    the crates are pinned to, so that the release-kit of a release is the one of the tag of the hub.
+
+    `texts` maps a file name to its text.
+    """
+    problems = []
+    for name, text in sorted(texts.items()):
+        for match in WORKFLOW_USES.finditer(text):
+            ref = match.group("ref")
+            where = f"{name}: StefanBartl/appkit/{match.group('path') or ''}@{ref}"
+            if not re.fullmatch(r"[0-9a-f]{40}", ref):
+                problems.append(f"{where}: not pinned by a full commit (NREL-03)")
+            elif ref != sha:
+                problems.append(f"{where}: Cargo.lock pins appkit at {sha}, one commit for both")
+    return problems
+
+
+def read_workflows(folder):
+    """The text of every workflow file in the folder (none when it is not there)."""
+    texts = {}
+    if os.path.isdir(folder):
+        for entry in sorted(os.listdir(folder)):
+            if entry.endswith((".yml", ".yaml")):
+                with open(os.path.join(folder, entry), encoding="utf-8") as f:
+                    texts[entry] = f.read()
+    return texts
+
+
 def remote_commit(tag):
     """The commit the tag names now: the peeled commit of an annotated tag."""
     refs = [f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"]
@@ -118,6 +158,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--lock", default="Cargo.lock")
     parser.add_argument("--ui-lock", default="ui/pnpm-lock.yaml")
+    parser.add_argument("--workflows", default=".github/workflows")
     args = parser.parse_args()
     with open(args.lock, encoding="utf-8") as f:
         packages = list(appkit_packages(f.read()))
@@ -131,6 +172,11 @@ def main():
     # The page and the hub take one version of the kit: the same tag, and the commit it named for both.
     if ui is not None and pins and ui not in pins:
         problems.append(f"the page pins the kit to {ui}, the hub to {sorted(pins)}: one tag for both")
+    # The actions of the release-kit the workflows take: the same commit as the crates.
+    workflows = read_workflows(args.workflows)
+    steps = sum(len(WORKFLOW_USES.findall(text)) for text in workflows.values())
+    if len(pins) == 1:
+        problems.extend(workflow_pins(workflows, next(iter(pins))[1]))
     if problems:
         for problem in problems:
             print(problem)
@@ -148,7 +194,8 @@ def main():
         print(f"the tag {tag} names {now} now, Cargo.lock pins {sha}: the tag was moved")
         return 1
     names = ", ".join(sorted(name for name, _ in packages))
-    print(f"ok: {names} and appkit-ui at {tag} = {sha[:12]}")
+    # Says how many steps of the workflows it found: none would be a pin that was not looked at.
+    print(f"ok: {names}, appkit-ui and {steps} step(s) of the workflows at {tag} = {sha[:12]}")
     return 0
 
 

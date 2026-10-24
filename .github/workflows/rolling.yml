@@ -1,22 +1,21 @@
 # The rolling build: after every green CI run on main, the program of exactly that commit is built for
-# Windows and Linux and put on the pre-release `latest`, whose assets are replaced each time. It is
-# for looking at the newest state with a click, not a release: no version tag, not signed, no
-# checksums beyond SHA256SUMS. A release stays a deliberate act (release.yml, rule NREL-07).
+# Windows and Linux and put on the pre-release `latest`, whose files are replaced each time. It is
+# for looking at the newest state with a click, not a release: no version tag, not signed. A release
+# stays a deliberate act (release.yml, rule NREL-07).
 #
 #   rules-hub-windows-x86_64.exe        a double click sets up and starts the hub, and opens the browser
 #   rules-hub-linux-x86_64.tar.gz       the same program for Linux (the archive keeps the executable bit)
-#   SHA256SUMS                          the checksums of both
+#   install.ps1, install.sh             install exactly this build for the current user (release-kit
+#                                       of appkit, stamped for the channel `latest`)
+#   uninstall.ps1, uninstall.sh         the scripts of scripts/ at this commit
+#   SHA256SUMS                          the checksums of all of them
 #
-# What the release page says (the tag `latest`, the title, the notes) moves LAST, after both files and
-# their checksums are in place: a run that fails or is cancelled in between leaves the page naming the
-# previous commit, never a new one with files of two commits. SHA256SUMS is taken away first, so a
-# page with files of two commits has none rather than a stale one.
+# Deciding (only the tip of main is built) and publishing (SHA256SUMS first, the words of the page
+# last) are the actions prepare and publish of appkit's release-kit, pinned by the commit of the tag
+# that Cargo.lock pins (tools/check-appkit-pin.py checks that they agree). The build is ours: its
+# files go to publish as artifacts.
 #
-# Only the newest commit of main is built: a CI run of an older commit (finished late, or re-run by hand)
-# does not move `latest` backwards.
-#
-# Actions are pinned by commit (NREL-03); a job gets only the rights it needs; `latest` is moved to the
-# commit through the API (no token is left in a checkout).
+# Actions are pinned by commit (NREL-03); a job gets only the rights it needs.
 
 name: rolling
 
@@ -51,41 +50,19 @@ jobs:
     permissions:
       contents: write
     outputs:
-      current: ${{ steps.facts.outputs.current }}
-      sha: ${{ steps.facts.outputs.sha }}
-      short: ${{ steps.facts.outputs.short }}
+      current: ${{ steps.prepare.outputs.current }}
+      sha: ${{ steps.prepare.outputs.sha }}
+      short: ${{ steps.prepare.outputs.short }}
     steps:
-      - name: Is this the newest commit of main, and does the pre-release exist
-        id: facts
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          set -eu
-          short="$(printf '%s' "$SHA" | cut -c1-7)"
-          tip="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "short=$short" >> "$GITHUB_OUTPUT"
-          if [ "$tip" != "$SHA" ]; then
-            echo "current=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::$short is not the tip of main ($tip): nothing is built for it"
-            exit 0
-          fi
-          echo "current=true" >> "$GITHUB_OUTPUT"
-          # The release page is made once (at this commit); afterwards only its files and, last, its words change.
-          if ! gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create latest --repo "$GITHUB_REPOSITORY" --prerelease --latest=false --target "$SHA" \
-              --title "Rolling build (starting)" --notes "The first rolling build is being made."
-          fi
-          # No checksums for files that are about to change.
-          gh release delete-asset latest SHA256SUMS --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
+      - id: prepare
+        uses: StefanBartl/appkit/release-kit/prepare@cdde054368f5fbe329239e4afde515d8af1b424b # v0.18.0
+        with:
+          sha: ${{ github.event.workflow_run.head_sha }}
+          token: ${{ github.token }}
 
   build:
     needs: prepare
     if: ${{ needs.prepare.outputs.current == 'true' }}
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -118,7 +95,6 @@ jobs:
           RULES_HUB_BUILD: ${{ needs.prepare.outputs.short }}
         run: cargo build --release --locked -p rules-hub
       - name: Pack and look at what it says
-        id: pack
         env:
           SHORT: ${{ needs.prepare.outputs.short }}
         run: |
@@ -128,43 +104,25 @@ jobs:
             *"(build ${SHORT})") ;;
             *) echo "::error::the program says '$got', it should name the build ${SHORT}"; exit 1 ;;
           esac
+          mkdir -p dist
           if [ "${{ matrix.program }}" = "rules-hub.exe" ]; then
-            cp target/release/rules-hub.exe "${{ matrix.asset }}"
+            cp target/release/rules-hub.exe "dist/${{ matrix.asset }}"
           else
             mkdir -p stage
             cp target/release/rules-hub LICENSE stage/
-            COPYFILE_DISABLE=1 tar -czf "${{ matrix.asset }}" -C stage .
+            COPYFILE_DISABLE=1 tar -czf "dist/${{ matrix.asset }}" -C stage .
           fi
-      - name: Replace the asset of the pre-release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload latest "${{ matrix.asset }}" --repo "$GITHUB_REPOSITORY" --clobber
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rolling-${{ matrix.os }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 1
 
-  sums:
+  # The files, the stamped install scripts and the checksums go up in one job; the words of the page
+  # move last, so only then does it name this commit.
+  publish:
     needs: [prepare, build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: The checksums of both files
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          mkdir -p assets
-          gh release download latest --repo "$GITHUB_REPOSITORY" --dir assets --pattern 'rules-hub-*' --clobber
-          count="$(ls assets | wc -l)"
-          if [ "$count" -ne 2 ]; then
-            echo "::error::$count file(s) instead of 2: a system is missing"
-            exit 1
-          fi
-          (cd assets && sha256sum rules-hub-* > SHA256SUMS && cat SHA256SUMS)
-          gh release upload latest assets/SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
-
-  # The words of the release page, last: only now does the page name this commit.
-  announce:
-    needs: [prepare, sums]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -173,18 +131,28 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
-      - name: Move latest to this commit and name it on the page
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ needs.prepare.outputs.sha }}
-          SHORT: ${{ needs.prepare.outputs.short }}
-        run: |
-          set -eu
-          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/latest" -f sha="$SHA" -F force=true >/dev/null
-          {
-            cat .github/rolling-notes.md
-            printf '\nBuilt from commit `%s`.\n' "$SHA"
-          } > notes.md
-          gh release edit latest --repo "$GITHUB_REPOSITORY" --prerelease --latest=false \
-            --title "Rolling build ($SHORT)" --notes-file notes.md
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: rolling-*
+          path: dist
+          merge-multiple: true
+      - uses: StefanBartl/appkit/release-kit/publish@cdde054368f5fbe329239e4afde515d8af1b424b # v0.18.0
+        with:
+          token: ${{ github.token }}
+          tag: latest
+          sha: ${{ needs.prepare.outputs.sha }}
+          files: dist
+          expect: 2
+          app: rules-desktop
+          windows-kind: hub
+          windows-program: rules-hub.exe
+          windows-release-asset: rules-hub-{version}-{triple}.zip
+          windows-rolling-asset: rules-hub-windows-x86_64.exe
+          unix-kind: hub
+          unix-program: rules-hub
+          unix-release-asset: rules-hub-{version}-{triple}.tar.gz
+          unix-rolling-asset: rules-hub-linux-x86_64.tar.gz
+          extra: |
+            scripts/uninstall.ps1
+            scripts/uninstall.sh
+          notes-file: .github/rolling-notes.md

@@ -72,9 +72,7 @@ rules-hub install [--autostart] [--shortcut]
 rules-hub uninstall [--purge-settings]
 ```
 
-To install the latest build for your user (no administrator rights), run `scripts\install.ps1` in your own
-PowerShell: `.\scripts\install.ps1 -Rolling -Autostart -Shortcut` (the rolling build of `main`; without a published
-release it is taken by itself).
+To install it for your user without administrator rights, see [Install](#install) below.
 
 It needs a Neovim (0.12 or newer), a rules.nvim checkout and the rules vault: `RULES_NVIM`,
 `RULES_ENGINE_DIR` (else `$REPOS_DIR/rules.nvim`) and `RULES_VAULT`, or the same as keys of
@@ -82,6 +80,45 @@ It needs a Neovim (0.12 or newer), a rules.nvim checkout and the rules vault: `R
 `RULES_DESKTOP_CONFIG_DIR` moves it). The default port is 17616 (`RULES_DESKTOP_PORT`). Which rule set
 may be shown as what is decided per device in `sources.json` in the same folder; a rule set without an
 entry is shown as unclassified, and a `sources.json` that cannot be read stops the start.
+
+## Install
+
+There are two channels, and both carry an install script that installs exactly their build:
+
+- **A release** (a tag `vX.Y.Z`, published by hand after a draft was tried).
+- **The rolling build** (the pre-release `latest`): the newest green commit of `main`, rebuilt after every CI run,
+  for trying what is new and not for anything that matters.
+
+The scripts need no administrator rights and install for one user, so they also work where SmartScreen stops a
+downloaded program. Run them in your own terminal (not elevated, not from inside a program that sandboxes AppData):
+
+```
+# the rolling build (Windows; Linux x86-64)
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/StefanBartl/rules-desktop/releases/download/latest/install.ps1 | iex"
+curl -fsSL https://github.com/StefanBartl/rules-desktop/releases/download/latest/install.sh | sh
+
+# a release: the same with the tag in place of latest, e.g. .../releases/download/v0.1.0/install.ps1
+```
+
+They download the program of that build, check it against its `SHA256SUMS` (a wrong or missing checksum installs
+nothing), and hand over to `rules-hub install`, which replaces the program in one step and brings a running hub
+back. The installation that is there is found and replaced, never a second one beside it: the script of `latest` run
+again updates to the newest rolling build, the script of a release run again repairs that release (to update, take
+the script of the newer release, or pass `-Version`/`-Rolling`). Saved as a file, the script takes options:
+`-InstallArgs '--autostart','--shortcut'` (`-- --autostart --shortcut`) registers the hub with your login and adds a
+link, `-File FILE` (`--file`) installs from a file you already have, with `-Sums FILE` or `-Sha256 HEX`. The install
+scripts are the ones of appkit's [release-kit](https://github.com/StefanBartl/appkit/tree/main/release-kit), stamped
+for this app and the channel when they are attached; `scripts/test-install.*` try the script of the pinned kit
+against the hub in the CI of every commit and in the build of every release.
+
+```
+sh scripts/uninstall.sh [--purge-settings]
+.\scripts\uninstall.ps1 [-PurgeSettings]
+```
+
+Uninstalling stops the hub, takes away the login entry and the link, and removes the program. Your settings stay
+unless you ask; your vault and your rule sets are never touched. How a release is made:
+[docs/RELEASING.md](docs/RELEASING.md).
 
 ## The shared kit
 
