@@ -633,3 +633,46 @@ test('a rule set is made, moved to the archive and brought back, and nothing is 
   await expect(row).toHaveCount(0);
   await expect(page.locator('li#archived-delta')).toBeVisible();
 });
+
+test('help: the documentation opens from the menu and is searched, the name leads to the overview, a click beside a dialog closes it', async ({
+  page,
+}) => {
+  await pair(page);
+  await view(page, 'Rules');
+
+  // The Help menu has the section Documentation with one entry per document, and the project links.
+  await page.getByRole('menuitem', { name: 'Help', exact: true }).click();
+  await expect(page.getByRole('menuitem', { name: 'GitHub repository' })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: 'License: MIT' })).toBeVisible();
+  await page.getByRole('menuitem', { name: 'Releasing', exact: true }).click();
+  const docs = page.getByRole('dialog', { name: 'Documentation' });
+  await expect(docs).toBeVisible();
+  await expect(docs.locator('article.doc')).toContainText(/release/i);
+  await expectAccessible(page, 'the documentation window');
+  const names = docs.locator('li button .name');
+  expect(await names.count()).toBeGreaterThan(1);
+  await docs.getByRole('searchbox').fill('loopback');
+  await expect(names).toHaveCount(1);
+  await docs.getByRole('searchbox').fill('zzzzzz-nothing');
+  await expect(docs.getByText('Nothing found')).toBeVisible();
+  // A click beside it closes it.
+  await page.mouse.click(4, 4);
+  await expect(docs).toHaveCount(0);
+
+  // The name at the left of the bar goes back to the overview.
+  await page.getByRole('button', { name: 'Rules', exact: true }).first().click();
+  await expect(page.getByRole('navigation').getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
+
+  // The dialog of a new rule: empty, a click beside it closes it; with a title typed in, it stays.
+  await view(page, 'Rules');
+  await page.getByRole('button', { name: 'New rule …' }).click();
+  const dialog = page.getByRole('dialog', { name: 'New rule' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel('Title').fill('A draft that stays');
+  await page.mouse.click(4, 4);
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel('Title').fill('');
+  await page.mouse.click(4, 4);
+  await expect(dialog).toHaveCount(0);
+  expect(consoleProblems.get(page)).toEqual([]);
+});

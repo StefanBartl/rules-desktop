@@ -11,6 +11,9 @@ importers:
       appkit-ui:
         specifier: github:StefanBartl/appkit#v0.21.1&path:ui-kit
         version: https://codeload.github.com/StefanBartl/appkit/tar.gz/ad3fb93c43cc39379c7ca090b0497af6eaafd873#path:ui-kit(svelte@5.57.2)
+      markdown-it:
+        specifier: ^15.0.3
+        version: 15.0.3
     devDependencies:
       '@axe-core/playwright':
         specifier: ^4.13.0

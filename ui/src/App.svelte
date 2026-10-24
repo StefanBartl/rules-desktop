@@ -2,12 +2,17 @@
   // The shell: the menu bar, the three views, the rule that is open, the palette and the toast. What is shown
   // depends on the phase of the page (pairing, offline, engine not ready, ready); everything else is the state of
   // `app` (lib/app.svelte.ts).
+  import Brand from 'appkit-ui/Brand.svelte';
+  import DocsDialog from 'appkit-ui/DocsDialog.svelte';
+  import { helpItems } from 'appkit-ui/docs';
+  import { kitTexts, lookup } from 'appkit-ui/i18n';
   import MenuBar, { type Menu } from 'appkit-ui/MenuBar.svelte';
   import { installNav } from 'appkit-ui/nav';
   import { isNavState, VIEWS, type App, type NavState, type Theme } from './lib/app.svelte';
   import { LANGS, translate, type Key, type Lang } from './lib/i18n';
   import { resolveKey } from 'appkit-ui/keymap';
   import { keymap, type ChordState } from './lib/keys';
+  import { DOCS, LICENSE, REPO_URL } from './lib/docs';
   import Detail from './views/Detail.svelte';
   import Families from './views/Families.svelte';
   import Overview from './views/Overview.svelte';
@@ -23,6 +28,16 @@
   let { app, code = null }: { app: App; code?: string | null } = $props();
 
   const t = (key: Key, params: Record<string, string | number> = {}) => translate(app.lang, key, params);
+  /** A text of the kit's own parts (the Help menu, the documentation window), in the language of the page. */
+  const kit = (key: keyof (typeof kitTexts)['en'], params: Record<string, string | number> = {}) =>
+    lookup(kitTexts[app.lang], key, params);
+  // The documentation window: opened at a document from the Help menu, or at its search box.
+  let docsOpen = $state(false);
+  let docsAt = $state<string | null>(null);
+  function openDocs(id: string | null): void {
+    docsAt = id;
+    docsOpen = true;
+  }
   const LANG_NAMES: Record<Lang, string> = { de: 'Deutsch', en: 'English' };
   const THEMES: readonly Theme[] = ['auto', 'light', 'dark'];
 
@@ -100,6 +115,14 @@
           onselect: () => app.setShortcuts(!app.shortcuts),
         },
         { kind: 'info' as const, label: t('help.keys') },
+        ...helpItems({
+          text: kit,
+          docs: DOCS,
+          opendoc: (id) => openDocs(id),
+          opensearch: () => openDocs(null),
+          repo: { url: REPO_URL },
+          license: LICENSE,
+        }),
       ],
     },
   ]);
@@ -139,7 +162,7 @@
 <a class="skip" href="#content">{t('app.skip')}</a>
 
 <header>
-  <h1>{t('app.title')}</h1>
+  <h1><Brand label={t('app.title')} hint={t('hint.brand')} onclick={() => app.setView('overview')} /></h1>
   <MenuBar {menus} label={t('menu.label')} />
   {#if app.phase === 'ready'}
     <nav aria-label={t('nav.label')}>
@@ -152,6 +175,21 @@
   {/if}
   <span class="connection" class:live={app.connection === 'live'} role="status">{t(`connection.${app.connection}`)}</span>
 </header>
+
+<DocsDialog
+  open={docsOpen}
+  docs={DOCS}
+  docId={docsAt}
+  onclose={() => (docsOpen = false)}
+  labels={{
+    title: kit('kit.docs.title'),
+    label: kit('kit.docs.label'),
+    placeholder: kit('kit.docs.placeholder'),
+    none: kit('kit.docs.none'),
+    list: kit('kit.docs.list'),
+    close: kit('kit.dismiss'),
+  }}
+/>
 
 <main id="content">
   {#if app.phase === 'starting'}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { closeOnBackdrop } from 'appkit-ui/backdrop';
   // The dialog for a new rule: the family, the title, the severity and the text; the next id of the family is shown
   // as the engine names it (it is not reserved: the engine picks the id under the lock of the rule set when the rule
   // is made). Preview asks the engine for a dry run and shows what would happen; Create writes. What a good rule is,
@@ -118,6 +119,7 @@
 
 <dialog
   bind:this={dialog}
+  use:closeOnBackdrop={{ closeable: () => [title, text, check].every((v) => v.trim() === '') }}
   aria-label={t('new.label')}
   oncancel={() => app.closeNewRule()}
   onclose={() => {

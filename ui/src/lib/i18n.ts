@@ -8,6 +8,7 @@ export const LANGS: readonly Lang[] = ['de', 'en'];
 
 const en = {
   'app.title': 'Rules',
+  'hint.brand': 'Back to the overview, the start view.',
   'nav.overview': 'Overview',
   'nav.families': 'Families',
   'nav.rules': 'Rules',
@@ -263,6 +264,7 @@ export type Key = keyof typeof en;
 
 const de: Record<Key, string> = {
   'app.title': 'Regeln',
+  'hint.brand': 'Zurück zur Übersicht, der Startansicht.',
   'nav.overview': 'Übersicht',
   'nav.families': 'Familien',
   'nav.rules': 'Regeln',
