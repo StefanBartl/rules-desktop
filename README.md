@@ -104,9 +104,12 @@ They download the program of that build, check it against its `SHA256SUMS` (a wr
 nothing), and hand over to `rules-hub install`, which replaces the program in one step and brings a running hub
 back. The installation that is there is found and replaced, never a second one beside it: the script of `latest` run
 again updates to the newest rolling build, the script of a release run again repairs that release (to update, take
-the script of the newer release, or pass `-Version`/`-Rolling`). Saved as a file, the script takes options:
-`-InstallArgs '--autostart','--shortcut'` (`-- --autostart --shortcut`) registers the hub with your login and adds a
-link, `-File FILE` (`--file`) installs from a file you already have, with `-Sums FILE` or `-Sha256 HEX`. The install
+the script of the newer release, or pass `-Version`/`-Rolling`). The `irm | iex` line takes no arguments; to pass some,
+make a script block of the text: `& ([scriptblock]::Create((irm .../install.ps1))) -InstallArgs '--autostart','--shortcut'`
+registers the hub with your login and adds a link (with the shell script saved: `sh install.sh -- --autostart --shortcut`).
+`-File FILE` (`--file`) installs from a file you already have, with `-Sums FILE` or `-Sha256 HEX`. Through
+`powershell -File` an array arrives as one string, so a saved `install.ps1` takes one `-InstallArgs` value there; in a
+PowerShell session a list is fine. The install
 scripts are the ones of appkit's [release-kit](https://github.com/StefanBartl/appkit/tree/main/release-kit), stamped
 for this app and the channel when they are attached; `scripts/test-install.*` try the script of the pinned kit
 against the hub in the CI of every commit and in the build of every release.

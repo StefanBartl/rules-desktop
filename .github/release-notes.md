@@ -1,8 +1,5 @@
 The hub as a program for each system, with the interface inside it. It reads the rule set and can make, change, retire, reinstate and move rules, with Undo and a conflict center; a rule set with no class on the device is never written.
 
-**This is a draft.** Before it is published a person installs from it and clicks through the
-result (install, start, repair, uninstall). A green build is not a tried program.
-
 ## Install
 
 Without administrator rights, for one user. The `install` script of this release installs exactly
@@ -11,14 +8,15 @@ over to `rules-hub install`. Run it in your own terminal (PowerShell not elevate
 
 ```
 # Windows
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/StefanBartl/rules-desktop/releases/download/<tag>/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/StefanBartl/rules-desktop/releases/download/{tag}/install.ps1 | iex"
 
 # Linux and macOS
-curl -fsSL https://github.com/StefanBartl/rules-desktop/releases/download/<tag>/install.sh | sh
+curl -fsSL https://github.com/StefanBartl/rules-desktop/releases/download/{tag}/install.sh | sh
 ```
 
-With the script saved: `.\install.ps1 -InstallArgs '--autostart','--shortcut'` or
-`sh install.sh -- --autostart --shortcut` registers the hub with your login and adds a link. The
+To register the hub with your login and add a link, pass the arguments: in PowerShell
+`& ([scriptblock]::Create((irm https://github.com/StefanBartl/rules-desktop/releases/download/{tag}/install.ps1))) -InstallArgs '--autostart','--shortcut'`,
+and with the shell script saved `sh install.sh -- --autostart --shortcut`. The
 program downloaded by the script is not stopped by SmartScreen; what is checked instead is that it
 is the file `SHA256SUMS` of this release lists.
 

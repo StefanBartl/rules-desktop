@@ -38,8 +38,9 @@ disagree, so a raised appkit tag raises them too.
    - builds the interface and then the program on each system, packs it, unpacks it again in
      another folder to ask it for its version, and runs the install script of the release-kit and
      the uninstall scripts against it in a folder of their own (`build`, rule `NREL-12`),
-   - makes the draft with the notes of `.github/release-notes.md` and adds the archives, the stamped
-     install scripts, the uninstall scripts and `SHA256SUMS` (`publish`).
+   - makes the draft with the notes of `.github/release-notes.md` (`{tag}` in them becomes the tag; the
+     notes stay on the page when it is published, so they say nothing about being a draft) and adds the
+     archives, the stamped install scripts, the uninstall scripts and `SHA256SUMS` (`publish`).
 5. **Open the draft on a clean user account** and, per system you have. The files of a draft can
    be downloaded only by people who may write to the repository (logged in, in the browser), so the
    script cannot fetch them by itself yet: download the archive of your system, `SHA256SUMS` and
