@@ -114,6 +114,14 @@ scripts are the ones of appkit's [release-kit](https://github.com/StefanBartl/ap
 for this app and the channel when they are attached; `scripts/test-install.*` try the script of the pinned kit
 against the hub in the CI of every commit and in the build of every release.
 
+**Or build this checkout and install it** (Windows; Rust and Node):
+the same steps as the rolling build, then `rules-hub install` of the program built here. Nothing is downloaded but the packages
+of the lock files, and a file built on the machine carries no mark for SmartScreen to stop.
+
+```
+.\scripts\build-install.ps1 [-BuildOnly] [-InstallArgs '--autostart','--shortcut']
+```
+
 ```
 sh scripts/uninstall.sh [--purge-settings]
 .\scripts\uninstall.ps1 [-PurgeSettings]
