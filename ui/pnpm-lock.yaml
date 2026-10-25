@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       appkit-ui:
-        specifier: github:StefanBartl/appkit#v0.21.1&path:ui-kit
-        version: https://codeload.github.com/StefanBartl/appkit/tar.gz/ad3fb93c43cc39379c7ca090b0497af6eaafd873#path:ui-kit(svelte@5.57.2)
+        specifier: github:StefanBartl/appkit#v0.21.2&path:ui-kit
+        version: https://codeload.github.com/StefanBartl/appkit/tar.gz/9e787e109f46353406a6a65cfa263de86d8c9cdb#path:ui-kit(svelte@5.57.2)
       markdown-it:
         specifier: ^15.0.3
         version: 15.0.3
@@ -214,8 +214,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  appkit-ui@https://codeload.github.com/StefanBartl/appkit/tar.gz/ad3fb93c43cc39379c7ca090b0497af6eaafd873#path:ui-kit:
-    resolution: {path: ui-kit, tarball: https://codeload.github.com/StefanBartl/appkit/tar.gz/ad3fb93c43cc39379c7ca090b0497af6eaafd873}
+  appkit-ui@https://codeload.github.com/StefanBartl/appkit/tar.gz/9e787e109f46353406a6a65cfa263de86d8c9cdb#path:ui-kit:
+    resolution: {path: ui-kit, tarball: https://codeload.github.com/StefanBartl/appkit/tar.gz/9e787e109f46353406a6a65cfa263de86d8c9cdb}
     version: 0.0.0
     peerDependencies:
       svelte: ^5.0.0
@@ -703,7 +703,7 @@ snapshots:
 
   acorn@8.19.0: {}
 
-  appkit-ui@https://codeload.github.com/StefanBartl/appkit/tar.gz/ad3fb93c43cc39379c7ca090b0497af6eaafd873#path:ui-kit(svelte@5.57.2):
+  appkit-ui@https://codeload.github.com/StefanBartl/appkit/tar.gz/9e787e109f46353406a6a65cfa263de86d8c9cdb#path:ui-kit(svelte@5.57.2):
     dependencies:
       markdown-it: 15.0.3
       svelte: 5.57.2
