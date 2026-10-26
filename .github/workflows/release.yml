@@ -3,11 +3,17 @@
 # publishes.
 #
 # What it makes, for the hub (the native shell and its Setup come with the Tauri task):
-#   rules-hub-X.Y.Z-<target>.zip|tar.gz   the program, one archive per system
-#   install.ps1, install.sh               install exactly this release for the current user
-#                                         (release-kit of appkit, stamped for this tag)
-#   uninstall.ps1, uninstall.sh           the scripts of scripts/ at this tag
-#   SHA256SUMS                            the checksums of all of them
+#   rules-hub-X.Y.Z-x86_64-pc-windows-msvc.zip   the program for Windows
+#   install.ps1                                  installs exactly this release for the current user
+#                                                (release-kit of appkit, stamped for this tag)
+#   uninstall.ps1                                the script of scripts/ at this tag
+#   SHA256SUMS                                   the checksums of all of them
+#
+# Runs on the self-hosted Windows runner of the author (the repository is private and has no paid plan, so
+# hosted runners do not start; see $REPOS_DIR/tasks-vault/TOOLS/self-hosted-runner.md), so only Windows is
+# built: the Linux and macOS archives and install.sh of the earlier hosted workflow are gone. The release-kit
+# actions run there by Git Bash (appkit v0.23.1 and later). The private source of appkit is read with the
+# login of `gh` (.github/actions/pnpm-auth, Git's own credentials), not with a token secret.
 #
 # Before anything is built: the tag, the version in crates/rules-hub/Cargo.toml and the
 # main branch agree, and the CI of main was green for this very commit (NREL-08). The draft, its
@@ -29,9 +35,16 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# `shell: bash` resolves to the WSL launcher on this machine; Git Bash is named explicitly, in 8.3 form because the
+# shell string is split at spaces.
+defaults:
+  run:
+    shell: C:\PROGRA~1\Git\bin\bash.exe --noprofile --norc -e -o pipefail {0}
+
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: read
@@ -44,7 +57,6 @@ jobs:
           persist-credentials: false
       - name: The tag, the version and the CI of this commit agree
         id: facts
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -80,40 +92,17 @@ jobs:
 
   build:
     needs: check
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            program: rules-hub.exe
-            archive: zip
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            program: rules-hub
-            archive: tar.gz
-          # Built, never tried on a Mac: the notes of the release say so.
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            program: rules-hub
-            archive: tar.gz
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: bash
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
           persist-credentials: false
-      - uses: ./.github/actions/private-read
-        with:
-          token: ${{ secrets.PRIVATE_READ_TOKEN }}
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: ./.github/actions/pnpm-auth
       # The interface is part of the binary (NREL-04): it is built first, then the program.
       - name: Build the interface
         working-directory: ui
         run: |
-          npm install --global pnpm@11.28.2
           pnpm install --frozen-lockfile
           pnpm build
       - name: Build the program
@@ -124,21 +113,15 @@ jobs:
           VERSION: ${{ needs.check.outputs.version }}
         run: |
           set -eu
-          name="rules-hub-${VERSION}-${{ matrix.target }}"
+          name="rules-hub-${VERSION}-x86_64-pc-windows-msvc"
           mkdir -p stage dist
-          cp "target/release/${{ matrix.program }}" stage/
+          cp target/release/rules-hub.exe stage/
           cp LICENSE stage/
-          if [ "${{ matrix.archive }}" = "zip" ]; then
-            (cd stage && 7z a -tzip "../dist/${name}.zip" . >/dev/null)
-            echo "file=dist/${name}.zip" >> "$GITHUB_OUTPUT"
-          else
-            # No AppleDouble files (._name) for the extended attributes of a file on a Mac.
-            COPYFILE_DISABLE=1 tar -czf "dist/${name}.tar.gz" -C stage .
-            echo "file=dist/${name}.tar.gz" >> "$GITHUB_OUTPUT"
-          fi
+          (cd stage && 7z a -tzip "../dist/${name}.zip" . >/dev/null)
+          echo "file=dist/${name}.zip" >> "$GITHUB_OUTPUT"
       # What the archive holds, without installing it (NREL-12): unpack it elsewhere, ask the
       # program for its version (the hub is a command line program), and run the install script of
-      # the release (release-kit of the appkit Cargo.lock pins) and the uninstall scripts on it in a
+      # the release (release-kit of the appkit Cargo.lock pins) and the uninstall script on it in a
       # folder of their own.
       - name: Check the archive
         env:
@@ -147,32 +130,27 @@ jobs:
         run: |
           set -eu
           mkdir -p check
-          if [ "${{ matrix.archive }}" = "zip" ]; then
-            7z x -y "-ocheck" "$FILE" >/dev/null
-          else
-            tar -xzf "$FILE" -C check
-          fi
-          got="$(check/${{ matrix.program }} --version)"
+          7z x -y "-ocheck" "$FILE" >/dev/null
+          got="$(check/rules-hub.exe --version)"
           if [ "$got" != "rules-hub ${VERSION}" ]; then
             echo "::error::the program in the archive says '$got', the tag says $VERSION"
             exit 1
           fi
-          if [ "${{ matrix.archive }}" = "zip" ]; then
-            pwsh -NoProfile -File scripts/test-install.ps1 "target/release/${{ matrix.program }}"
-          fi
-          sh scripts/test-install.sh "target/release/${{ matrix.program }}"
+          pwsh -NoProfile -File scripts/test-install.ps1 target/release/rules-hub.exe
+          sh scripts/test-install.sh target/release/rules-hub.exe
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-${{ matrix.target }}
+          name: release-windows
           path: ${{ steps.pack.outputs.file }}
           if-no-files-found: error
           retention-days: 3
 
-  # The draft (made here when there is none), the archives, the install scripts stamped for this tag,
-  # the uninstall scripts and the checksums of all of them.
+  # The draft (made here when there is none), the archive, the install script stamped for this tag,
+  # the uninstall script and the checksums of all of them.
   publish:
     needs: [check, build]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -184,22 +162,17 @@ jobs:
           pattern: release-*
           path: dist
           merge-multiple: true
-      - uses: WKDSteve/appkit/release-kit/publish@422501b0f9fda97f3b2d9d06fd22cf9d536a6538 # v0.23.0
+      - uses: WKDSteve/appkit/release-kit/publish@2d0f4a6921d11848bbb579e2760614e88723e42d # v0.23.1
         with:
           token: ${{ github.token }}
           tag: ${{ github.ref_name }}
           files: dist
-          expect: 3
+          expect: 1
           app: rules-desktop
           windows-kind: hub
           windows-program: rules-hub.exe
           windows-release-asset: rules-hub-{version}-{triple}.zip
           windows-rolling-asset: rules-hub-windows-x86_64.exe
-          unix-kind: hub
-          unix-program: rules-hub
-          unix-release-asset: rules-hub-{version}-{triple}.tar.gz
-          unix-rolling-asset: rules-hub-linux-x86_64.tar.gz
           extra: |
             scripts/uninstall.ps1
-            scripts/uninstall.sh
           notes-file: .github/release-notes.md
