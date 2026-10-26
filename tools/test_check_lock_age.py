@@ -21,7 +21,7 @@ LOCK = (
     'version = 4\n\n[[package]]\nname = "serde"\nversion = "1.0.0"\n'
     'source = "registry+https://github.com/rust-lang/crates.io-index"\n\n'
     '[[package]]\nname = "appkit-hub"\nversion = "0.0.0"\n'
-    'source = "git+https://github.com/StefanBartl/appkit?tag=v0.4.0#1cb7df1e150be297b1dd0ff5112f51d97efb745d"\n'
+    'source = "git+https://github.com/WKDSteve/appkit?tag=v0.4.0#1cb7df1e150be297b1dd0ff5112f51d97efb745d"\n'
 )
 
 

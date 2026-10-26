@@ -22,7 +22,7 @@ SPEC.loader.exec_module(pin)
 
 SHA = "6111a9b9f78065d411dc502114b244ccf19357b2"
 OTHER = "56df6b11ba66e1d9dd918a7284709bfb84e36dcd"
-URL = "https://github.com/StefanBartl/appkit"
+URL = "https://github.com/WKDSteve/appkit"
 
 
 def lock(*sources):
@@ -43,8 +43,8 @@ def tagged(tag="v0.1.0", sha=SHA, url=URL):
 
 def ui_lock(specifier=None, version=None):
     """A pnpm-lock.yaml as pnpm writes it for the kit (the GitHub short form and the tarball of the commit)."""
-    specifier = specifier or "github:StefanBartl/appkit#v0.1.0&path:ui-kit"
-    version = version or f"https://codeload.github.com/StefanBartl/appkit/tar.gz/{SHA}#path:ui-kit(svelte@5.57.1)"
+    specifier = specifier or "github:WKDSteve/appkit#v0.1.0&path:ui-kit"
+    version = version or f"https://codeload.github.com/WKDSteve/appkit/tar.gz/{SHA}#path:ui-kit(svelte@5.57.1)"
     return (
         "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      appkit-ui:\n"
         f"        specifier: {specifier}\n        version: {version}\n"
@@ -143,14 +143,14 @@ class Main(unittest.TestCase):
     def test_the_release_kit_of_the_workflows_on_the_same_commit_passes(self):
         flow = (
             "jobs:\n  publish:\n    steps:\n"
-            f"      - uses: StefanBartl/appkit/release-kit/publish@{SHA} # v0.1.0\n"
-            f"      - id: prepare\n        uses: StefanBartl/appkit/release-kit/prepare@{SHA} # v0.1.0\n"
+            f"      - uses: WKDSteve/appkit/release-kit/publish@{SHA} # v0.1.0\n"
+            f"      - id: prepare\n        uses: WKDSteve/appkit/release-kit/prepare@{SHA} # v0.1.0\n"
         )
         code, words = self.run_main(lock(tagged(), tagged(), tagged()), [SHA], workflows={"rolling.yml": flow})
         self.assertEqual(code, 0, words)
 
     def test_the_release_kit_of_a_workflow_on_another_commit_fails(self):
-        flow = f"      - uses: StefanBartl/appkit/release-kit/publish@{OTHER} # v0.0.9\n"
+        flow = f"      - uses: WKDSteve/appkit/release-kit/publish@{OTHER} # v0.0.9\n"
         code, words = self.run_main(lock(tagged(), tagged(), tagged()), [SHA], workflows={"release.yml": flow})
         self.assertEqual(code, 1)
         self.assertIn("release.yml", words)
@@ -158,9 +158,9 @@ class Main(unittest.TestCase):
 
     def test_a_quoted_other_case_or_root_action_is_read_too(self):
         for line in (
-            f'      - uses: "StefanBartl/appkit/release-kit/publish@{OTHER}"\n',
-            f"      - uses: stefanbartl/APPKIT/release-kit/publish@{OTHER}\n",
-            f"      - uses: StefanBartl/appkit@{OTHER}\n",
+            f'      - uses: "WKDSteve/appkit/release-kit/publish@{OTHER}"\n',
+            f"      - uses: WKDSteve/APPKIT/release-kit/publish@{OTHER}\n",
+            f"      - uses: WKDSteve/appkit@{OTHER}\n",
         ):
             with self.subTest(line=line):
                 code, words = self.run_main(lock(tagged(), tagged(), tagged()), [SHA], workflows={"r.yml": line})
@@ -168,13 +168,13 @@ class Main(unittest.TestCase):
                 self.assertIn(OTHER, words)
 
     def test_the_steps_found_are_counted(self):
-        flow = f"      - uses: StefanBartl/appkit/release-kit/publish@{SHA}\n"
+        flow = f"      - uses: WKDSteve/appkit/release-kit/publish@{SHA}\n"
         code, words = self.run_main(lock(tagged(), tagged(), tagged()), [SHA], workflows={"r.yml": flow})
         self.assertEqual(code, 0, words)
         self.assertIn("1 step(s)", words)
 
     def test_the_release_kit_by_a_tag_fails(self):
-        flow = "        uses: StefanBartl/appkit/release-kit/prepare@v0.1.0\n"
+        flow = "        uses: WKDSteve/appkit/release-kit/prepare@v0.1.0\n"
         code, words = self.run_main(lock(tagged(), tagged(), tagged()), [SHA], workflows={"rolling.yaml": flow})
         self.assertEqual(code, 1)
         self.assertIn("not pinned by a full commit", words)
@@ -194,13 +194,13 @@ class Main(unittest.TestCase):
         self.assertEqual(self.run_main(lock(), [SHA])[0], 1)
 
     def test_a_page_on_another_commit_than_the_hub_fails(self):
-        other = ui_lock(version=f"https://codeload.github.com/StefanBartl/appkit/tar.gz/{OTHER}#path:ui-kit")
+        other = ui_lock(version=f"https://codeload.github.com/WKDSteve/appkit/tar.gz/{OTHER}#path:ui-kit")
         code, words = self.run_main(lock(tagged(), tagged(), tagged()), [SHA], other)
         self.assertEqual(code, 1)
         self.assertIn("one tag for both", words)
 
     def test_a_page_on_another_tag_than_the_hub_fails(self):
-        other = ui_lock(specifier="github:StefanBartl/appkit#v0.2.0&path:ui-kit")
+        other = ui_lock(specifier="github:WKDSteve/appkit#v0.2.0&path:ui-kit")
         code, words = self.run_main(lock(tagged(), tagged(), tagged()), [SHA], other)
         self.assertEqual(code, 1)
         self.assertIn("one tag for both", words)

@@ -2,7 +2,7 @@
 // they read without a network, and are the text of this commit).
 import type { DocEntry } from 'appkit-ui/docs';
 
-export const REPO_URL = 'https://github.com/StefanBartl/rules-desktop';
+export const REPO_URL = 'https://github.com/WKDSteve/rules-desktop';
 export const LICENSE = { name: 'MIT', url: `${REPO_URL}/blob/main/LICENSE` } as const;
 
 /** The first level-one heading, else the name of the file: the title of a document in the list. */

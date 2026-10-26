@@ -2,7 +2,7 @@
 
 `rules-hub` is a web server on your own machine. Anything on the machine, and any web page you open in a browser, can try
 to talk to it. The guard, the pairing, the sessions, the limits and the engine seam are those of
-[appkit](https://github.com/StefanBartl/appkit): **its `SECURITY.md` is the description of what holds for every app, and
+[appkit](https://github.com/WKDSteve/appkit): **its `SECURITY.md` is the description of what holds for every app, and
 its security matrix (`appkit-testkit`, `security_matrix!`) is the shared test of it.** This hub runs that matrix
 (`crates/rules-hub/tests/security.rs`): every route of `ROUTES` is a data route, and the matrix tries each one without a
 session. This page says what is the rules hub's own.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail when the appkit pin of Cargo.lock is not the commit its tag names now.
 
-The hub depends on https://github.com/StefanBartl/appkit by a tag. Cargo.lock pins the commit the
+The hub depends on https://github.com/WKDSteve/appkit by a tag. Cargo.lock pins the commit the
 tag named when the lock was written, and a build with --locked takes that commit whatever the tag
 says later. A tag that was moved (by mistake, or by someone who got write access) would go
 unnoticed. This reads every appkit package of Cargo.lock and asks the repository where its tag
@@ -11,7 +11,7 @@ points now.
 
 Exit 0: every appkit package is pinned by a tag, all by the same tag and commit, the page pins the
 kit's folder (`appkit-ui` in ui/pnpm-lock.yaml) to that same tag and commit, every action of the
-kit a workflow takes (`uses: StefanBartl/appkit/release-kit/...@<sha>`) is pinned by that same
+kit a workflow takes (`uses: WKDSteve/appkit/release-kit/...@<sha>`) is pinned by that same
 commit, and the tag names that commit. Exit 1: what is wrong is listed. Exit 2: the check itself could not run (git, network); that
 is not a pass.
 
@@ -24,7 +24,7 @@ import re
 import subprocess
 import sys
 
-APPKIT = "https://github.com/StefanBartl/appkit"
+APPKIT = "https://github.com/WKDSteve/appkit"
 SOURCE = re.compile(
     r"^git\+(?P<url>[^?#]+)(?:\?(?P<query>[^#]*))?#(?P<sha>[0-9a-f]{40})$"
 )
@@ -59,17 +59,17 @@ def pinned(packages):
     return pins, problems
 
 
-# pnpm writes the specifier as `github:StefanBartl/appkit#v0.3.0&path:ui-kit` (also when it was given as a
+# pnpm writes the specifier as `github:WKDSteve/appkit#v0.3.0&path:ui-kit` (also when it was given as a
 # git+https URL) and the resolved version as the tarball of the commit, `https://codeload.github.com/
-# StefanBartl/appkit/tar.gz/<sha>#path:ui-kit`, with the peers in brackets after it.
+# WKDSteve/appkit/tar.gz/<sha>#path:ui-kit`, with the peers in brackets after it.
 UI_SPECIFIER = re.compile(
-    r"^\s*specifier: (?:github:StefanBartl/appkit|git\+https://github\.com/StefanBartl/appkit(?:\.git)?)"
+    r"^\s*specifier: (?:github:WKDSteve/appkit|git\+https://github\.com/WKDSteve/appkit(?:\.git)?)"
     r"#(?P<tag>[^&\s]+)&path:ui-kit\s*$",
     re.M,
 )
 UI_VERSION = re.compile(
-    r"^\s*version: (?:https://codeload\.github\.com/StefanBartl/appkit/tar\.gz/(?P<sha>[0-9a-f]{40})#path:ui-kit"
-    r"|git\+https://github\.com/StefanBartl/appkit(?:\.git)?#(?P<sha2>[0-9a-f]{40})&path:ui-kit)(?:\([^)]*\))?\s*$",
+    r"^\s*version: (?:https://codeload\.github\.com/WKDSteve/appkit/tar\.gz/(?P<sha>[0-9a-f]{40})#path:ui-kit"
+    r"|git\+https://github\.com/WKDSteve/appkit(?:\.git)?#(?P<sha2>[0-9a-f]{40})&path:ui-kit)(?:\([^)]*\))?\s*$",
     re.M,
 )
 
@@ -97,11 +97,11 @@ def ui_pin(lock_text):
     return (spec.group("tag"), version.group("sha") or version.group("sha2")), problems
 
 
-# A step of a workflow that takes an action of the kit: `uses: StefanBartl/appkit/release-kit/publish@<ref>`,
+# A step of a workflow that takes an action of the kit: `uses: WKDSteve/appkit/release-kit/publish@<ref>`,
 # also quoted, in another case (GitHub does not tell owner and repository names apart by case) or from the
-# root of the repository (`StefanBartl/appkit@<ref>`).
+# root of the repository (`WKDSteve/appkit@<ref>`).
 WORKFLOW_USES = re.compile(
-    r"""^\s*-?\s*uses:\s*["']?StefanBartl/appkit(?:/(?P<path>[^@\s"']+))?@(?P<ref>[^\s"'#]+)""",
+    r"""^\s*-?\s*uses:\s*["']?WKDSteve/appkit(?:/(?P<path>[^@\s"']+))?@(?P<ref>[^\s"'#]+)""",
     re.M | re.I,
 )
 
@@ -116,7 +116,7 @@ def workflow_pins(texts, sha):
     for name, text in sorted(texts.items()):
         for match in WORKFLOW_USES.finditer(text):
             ref = match.group("ref")
-            where = f"{name}: StefanBartl/appkit/{match.group('path') or ''}@{ref}"
+            where = f"{name}: WKDSteve/appkit/{match.group('path') or ''}@{ref}"
             if not re.fullmatch(r"[0-9a-f]{40}", ref):
                 problems.append(f"{where}: not pinned by a full commit (NREL-03)")
             elif ref != sha:

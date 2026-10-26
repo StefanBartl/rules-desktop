@@ -1,11 +1,11 @@
 # rules-desktop
 
-A local web UI and desktop app for the rule set of [rules.nvim](https://github.com/StefanBartl/rules.nvim):
+A local web UI and desktop app for the rule set of [rules.nvim](https://github.com/WKDSteve/rules.nvim):
 browse the rules, search them, and later create, change, retire and move them, in the browser first and as a small
-native app after that. The sibling of [tasks-desktop](https://github.com/StefanBartl/tasks-desktop), built on the same
+native app after that. The sibling of [tasks-desktop](https://github.com/WKDSteve/tasks-desktop), built on the same
 parts and meant to look and behave like it.
 
-**Status: early development. No release yet.** The newest state of `main` is on the pre-release [`latest`](https://github.com/StefanBartl/rules-desktop/releases/tag/latest) (a Windows program and a Linux archive, rebuilt after every green CI run, unsigned). The interface reads and writes: you can make, change, retire, reinstate and move rules, several at once, with Undo and a conflict center. It reads: the hub serves families, rules,
+**Status: early development. No release yet.** The newest state of `main` is on the pre-release [`latest`](https://github.com/WKDSteve/rules-desktop/releases/tag/latest) (a Windows program and a Linux archive, rebuilt after every green CI run, unsigned). The interface reads and writes: you can make, change, retire, reinstate and move rules, several at once, with Undo and a conflict center. It reads: the hub serves families, rules,
 search, findings and the rule detail, follows the rule files live and passes its security matrix, axe and a corpus of
 hostile rules in the browser. The native shell and the waivers follow the phases below. It is not a release: use it to look, not to rely on. How to
 use it: [docs/USAGE.md](docs/USAGE.md), a walk through one sitting in [docs/WORKFLOW.md](docs/WORKFLOW.md); what it does about security: [docs/SECURITY.md](docs/SECURITY.md).
@@ -18,7 +18,7 @@ rules: find the next free id of a family, add a block without touching the text 
 reusing its id. That is what `tasks.nvim` has for tasks, and this app is the window onto it.
 
 It is **not** a place to run the checks or to let an agent work the manual rules: that stays in
-[docmap-desktop](https://github.com/StefanBartl/docmap-desktop). This app is about the rule set itself.
+[docmap-desktop](https://github.com/WKDSteve/docmap-desktop). This app is about the rule set itself.
 
 ## Principles
 
@@ -94,8 +94,8 @@ downloaded program. Run them in your own terminal (not elevated, not from inside
 
 ```
 # the rolling build (Windows; Linux x86-64)
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/StefanBartl/rules-desktop/releases/download/latest/install.ps1 | iex"
-curl -fsSL https://github.com/StefanBartl/rules-desktop/releases/download/latest/install.sh | sh
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/WKDSteve/rules-desktop/releases/download/latest/install.ps1 | iex"
+curl -fsSL https://github.com/WKDSteve/rules-desktop/releases/download/latest/install.sh | sh
 
 # a release: the same with the tag in place of latest, e.g. .../releases/download/v0.1.0/install.ps1
 ```
@@ -110,7 +110,7 @@ registers the hub with your login and adds a link (with the shell script saved: 
 `-File FILE` (`--file`) installs from a file you already have, with `-Sums FILE` or `-Sha256 HEX`. Through
 `powershell -File` an array arrives as one string, so a saved `install.ps1` takes one `-InstallArgs` value there; in a
 PowerShell session a list is fine. The install
-scripts are the ones of appkit's [release-kit](https://github.com/StefanBartl/appkit/tree/main/release-kit), stamped
+scripts are the ones of appkit's [release-kit](https://github.com/WKDSteve/appkit/tree/main/release-kit), stamped
 for this app and the channel when they are attached; `scripts/test-install.*` try the script of the pinned kit
 against the hub in the CI of every commit and in the build of every release.
 
@@ -134,7 +134,7 @@ unless you ask; your vault and your rule sets are never touched. How a release i
 ## The shared kit
 
 The server guard, sessions, pairing, limits and the login entry come from
-[appkit](https://github.com/StefanBartl/appkit), the kit tasks-desktop is built on too. It is a git dependency pinned
+[appkit](https://github.com/WKDSteve/appkit), the kit tasks-desktop is built on too. It is a git dependency pinned
 by its tag in `Cargo.toml`, and the page takes the kit's browser part, `appkit-ui` (design tokens, base rules, menu bar,
 markdown reader and more), from the same tag in `ui/package.json`. `tools/check-appkit-pin.py` checks that both lock
 files hold one tag and one commit and that the tag still names it; `tools/check-color-literals.py` refuses a hex colour or
@@ -148,7 +148,7 @@ version). The tests answer with copies of the engine's golden documents (`crates
 which CI compares with the pinned engine. Its commands and views come with the rest of the read-only UI phase.
 
 To try a change of appkit before it has a tag, point the crates at a local checkout in a `.cargo/config.toml` that is
-not committed (`[patch."https://github.com/StefanBartl/appkit"]`). That rewrites `Cargo.lock`: restore it with
+not committed (`[patch."https://github.com/WKDSteve/appkit"]`). That rewrites `Cargo.lock`: restore it with
 `git checkout -- Cargo.lock` before a commit, then run the pin check.
 
 ## License

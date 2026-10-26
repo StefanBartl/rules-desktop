@@ -37,4 +37,4 @@ unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # appkit, pinned by its tag (tools/check-appkit-pin.py).
-allow-git = ["https://github.com/StefanBartl/appkit"]
+allow-git = ["https://github.com/WKDSteve/appkit"]

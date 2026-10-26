@@ -84,7 +84,7 @@ a pin is its own commit, with the specs green against the new engine.
 ## Shared kit (`appkit`)
 
 The parts shared with tasks-desktop (server guard, sessions, shell, design tokens, and the release
-kit) live in the repository [appkit](https://github.com/StefanBartl/appkit):
+kit) live in the repository [appkit](https://github.com/WKDSteve/appkit):
 
 - the Rust parts come in as a **Git dependency with a tag** (never a branch), so `Cargo.lock` pins
   the exact commit; `cargo deny` allows that one Git source by name in `deny.toml`;

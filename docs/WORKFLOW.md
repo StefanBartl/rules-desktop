@@ -23,7 +23,7 @@ work:
 - files that have no class on this device (see `sources.json`),
 - retired rules.
 
-The page does not run any check. That is for [docmap-desktop](https://github.com/StefanBartl/docmap-desktop).
+The page does not run any check. That is for [docmap-desktop](https://github.com/WKDSteve/docmap-desktop).
 
 ## 3. Go through the families (`g f`)
 

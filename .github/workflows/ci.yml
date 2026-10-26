@@ -37,14 +37,14 @@ jobs:
       # The pins must exist: a typo in engine.lock fails here, not later.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
-          repository: StefanBartl/rules.nvim
+          repository: WKDSteve/rules.nvim
           token: ${{ secrets.PRIVATE_READ_TOKEN }}
           ref: ${{ steps.engine.outputs.commit }}
           path: engine/rules.nvim
           persist-credentials: false
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
-          repository: StefanBartl/lib.nvim
+          repository: WKDSteve/lib.nvim
           ref: ${{ steps.engine.outputs.lib_commit }}
           path: engine/lib.nvim
           persist-credentials: false
@@ -153,14 +153,14 @@ jobs:
           echo "lib_commit=$(sed -n 's/^lib_commit *= *//p' engine.lock)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
-          repository: StefanBartl/rules.nvim
+          repository: WKDSteve/rules.nvim
           token: ${{ secrets.PRIVATE_READ_TOKEN }}
           ref: ${{ steps.engine.outputs.commit }}
           path: engine/rules.nvim
           persist-credentials: false
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
-          repository: StefanBartl/lib.nvim
+          repository: WKDSteve/lib.nvim
           ref: ${{ steps.engine.outputs.lib_commit }}
           path: engine/lib.nvim
           persist-credentials: false
