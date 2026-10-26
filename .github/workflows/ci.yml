@@ -113,6 +113,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
           persist-credentials: false
+      - uses: ./.github/actions/pnpm-auth
       # The lockfile is the truth; the age and trust policy are in ui/pnpm-workspace.yaml. pnpm is the runner's own
       # (a global install would change this machine on every run).
       - run: pnpm install --frozen-lockfile
@@ -140,6 +141,7 @@ jobs:
           git -C engine/rules.nvim checkout --quiet "$commit"
           git clone --quiet https://github.com/WKDSteve/lib.nvim engine/lib.nvim
           git -C engine/lib.nvim checkout --quiet "$lib_commit"
+      - uses: ./.github/actions/pnpm-auth
       - name: Build the page, then the binary that embeds it
         run: |
           pnpm --dir ui install --frozen-lockfile
