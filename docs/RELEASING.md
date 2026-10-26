@@ -94,26 +94,21 @@ kit) live in the repository [appkit](https://github.com/WKDSteve/appkit):
   these places, in its own commit (`cargo update -p appkit-hub`, `cd ui && pnpm install`,
   `python tools/check-appkit-pin.py`).
 
-## Private repositories: the token
+## Private repositories and the runner
 
-Since 2026-10-26 the CI (`ci.yml`) runs on a self-hosted runner of this machine and needs no token secret: it uses the
-login of `gh` (see `.github/actions/pnpm-auth`, TOOLS/self-hosted-runner.md of the vault). The rest of this section is
-about `release.yml` and `rolling.yml`, which still run on GitHub-hosted runners (they will not start without a paid
-plan, and `release-kit` runs bash steps that the Windows runner does not offer).
+The repository is private and has no paid plan, so CI (`ci.yml`), the rolling build (`rolling.yml`) and the release
+(`release.yml`) all run on the self-hosted Windows runner of the author (`runs-on: [self-hosted, windows]`, Git Bash
+by its full path). Start it with `pwsh $env:NVIM_CONFIG_DIR\scripts\runners.ps1 ensure <repo>`; without it a push or a
+tag stays "queued" (no red mark, discarded after 24 h). Set-up and traps: `tasks-vault/TOOLS/self-hosted-runner.md`.
 
-`appkit`, `tasks.nvim`, `rules.nvim` and `rules-vault` are private. The token of a run reaches only its own
-repository, so every job that checks one of them out, or lets Cargo or pnpm fetch `appkit`, first runs
-`.github/actions/private-read` with the secret `PRIVATE_READ_TOKEN`.
-
-- Make it once: GitHub, Settings, Developer settings, fine-grained tokens. Resource owner: the account;
-  repositories: only `appkit`, `tasks.nvim`, `rules.nvim`, `rules-vault`; permission: Contents, read-only.
-  Set an expiry and note the date; a run without a valid token fails at its first step with a message that
-  says so.
-- Store it as a repository secret of `rules-desktop` (and `tasks-desktop`, `ai-desktop`, `docmap-desktop`):
-  `gh secret set PRIVATE_READ_TOKEN -R WKDSteve/rules-desktop` (the value is asked for, not put on the command line).
-- `appkit` lets the repositories of the account use its actions (Settings, Actions, Access); the release
-  workflows use `release-kit` from it.
-- Installing from a private release needs `GH_TOKEN` as well: see the release-kit README of `appkit`.
+- Only Windows is built and tested: there is no Linux or macOS archive and no `install.sh` any more.
+- The private sources (the engine at the pinned commit of `engine.lock`, appkit through Cargo and pnpm) are read with
+  the login of `gh` and Git's own credentials (`.github/actions/pnpm-auth` hands the token to pnpm for the length of
+  one job). There is no token secret.
+- `release-kit` of appkit runs on the runner from v0.23.1 on (Git Bash by its full path); the apps pin it by the
+  commit of the tag that `Cargo.lock` pins.
+- Installing from this private repository needs `GH_TOKEN` (`$env:GH_TOKEN = (gh auth token)`): see the notes of the
+  release page and the release-kit README of appkit.
 
 ## Not yet
 
