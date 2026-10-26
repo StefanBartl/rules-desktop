@@ -72,22 +72,25 @@ mod tests {
         assert!(crate::IDENTITY.program_file().starts_with("rules-hub"));
     }
 
+    /// The desktop link keeps what the link of the script host was: the name `Rules.lnk`,
+    /// `start --open`, minimized, the description of the app.
     #[test]
-    fn the_desktop_link_is_the_hubs_own() {
-        let make = appkit_hub::background::link_script(
-            crate::IDENTITY.title,
+    fn the_desktop_link_is_the_one_it_always_was() {
+        assert_eq!(
+            appkit_hub::background::desktop_link_name(crate::IDENTITY.title),
+            "Rules.lnk"
+        );
+        let link = appkit_hub::background::app_link(
             crate::IDENTITY.app,
-            r"C:\x\rules-hub.exe",
+            std::path::Path::new(r"C:\x\rules-hub.exe"),
         );
-        assert!(make.contains(r"\Rules.lnk"), "{make}");
-        assert!(
-            make.contains(r#"link.TargetPath = "C:\x\rules-hub.exe""#),
-            "{make}"
+        assert_eq!(link.target, r"C:\x\rules-hub.exe");
+        assert_eq!(link.arguments, "start --open");
+        assert_eq!(link.working_dir, r"C:\x");
+        assert_eq!(link.show_command, 7);
+        assert_eq!(
+            link.description,
+            "rules-desktop: start the hub and open the page"
         );
-        assert!(
-            make.contains(r#"link.Arguments = "start --open""#),
-            "{make}"
-        );
-        assert!(!make.contains("Tasks") && !make.contains("tasks"), "{make}");
     }
 }
