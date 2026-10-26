@@ -96,6 +96,11 @@ kit) live in the repository [appkit](https://github.com/WKDSteve/appkit):
 
 ## Private repositories: the token
 
+Since 2026-10-26 the CI (`ci.yml`) runs on a self-hosted runner of this machine and needs no token secret: it uses the
+login of `gh` (see `.github/actions/pnpm-auth`, TOOLS/self-hosted-runner.md of the vault). The rest of this section is
+about `release.yml` and `rolling.yml`, which still run on GitHub-hosted runners (they will not start without a paid
+plan, and `release-kit` runs bash steps that the Windows runner does not offer).
+
 `appkit`, `tasks.nvim`, `rules.nvim` and `rules-vault` are private. The token of a run reaches only its own
 repository, so every job that checks one of them out, or lets Cargo or pnpm fetch `appkit`, first runs
 `.github/actions/private-read` with the secret `PRIVATE_READ_TOKEN`.
