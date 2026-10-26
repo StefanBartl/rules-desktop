@@ -94,6 +94,22 @@ kit) live in the repository [appkit](https://github.com/StefanBartl/appkit):
   these places, in its own commit (`cargo update -p appkit-hub`, `cd ui && pnpm install`,
   `python tools/check-appkit-pin.py`).
 
+## Private repositories: the token
+
+`appkit`, `tasks.nvim`, `rules.nvim` and `rules-vault` are private. The token of a run reaches only its own
+repository, so every job that checks one of them out, or lets Cargo or pnpm fetch `appkit`, first runs
+`.github/actions/private-read` with the secret `PRIVATE_READ_TOKEN`.
+
+- Make it once: GitHub, Settings, Developer settings, fine-grained tokens. Resource owner: the account;
+  repositories: only `appkit`, `tasks.nvim`, `rules.nvim`, `rules-vault`; permission: Contents, read-only.
+  Set an expiry and note the date; a run without a valid token fails at its first step with a message that
+  says so.
+- Store it as a repository secret of `rules-desktop` (and `tasks-desktop`, `ai-desktop`, `docmap-desktop`):
+  `gh secret set PRIVATE_READ_TOKEN -R WKDSteve/rules-desktop` (the value is asked for, not put on the command line).
+- `appkit` lets the repositories of the account use its actions (Settings, Actions, Access); the release
+  workflows use `release-kit` from it.
+- Installing from a private release needs `GH_TOKEN` as well: see the release-kit README of `appkit`.
+
 ## Not yet
 
 Code signing (Authenticode, notarisation), the installer of the native shell (Tauri), and the

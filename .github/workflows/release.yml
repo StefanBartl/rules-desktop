@@ -105,6 +105,9 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
           persist-credentials: false
+      - uses: ./.github/actions/private-read
+        with:
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
       # The interface is part of the binary (NREL-04): it is built first, then the program.
       - name: Build the interface

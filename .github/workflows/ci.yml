@@ -25,6 +25,9 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
           persist-credentials: false
+      - uses: ./.github/actions/private-read
+        with:
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
       - name: Read the pinned engine commits
         id: engine
         shell: bash
@@ -35,6 +38,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
           repository: StefanBartl/rules.nvim
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
           ref: ${{ steps.engine.outputs.commit }}
           path: engine/rules.nvim
           persist-credentials: false
@@ -96,6 +100,9 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
           persist-credentials: false
+      - uses: ./.github/actions/private-read
+        with:
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
       - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
         with:
@@ -116,6 +123,9 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
           persist-credentials: false
+      - uses: ./.github/actions/private-read
+        with:
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
       # The lockfile is the truth; the age and trust policy are in ui/pnpm-workspace.yaml.
       - run: npm install --global pnpm@11.28.2
       - run: pnpm install --frozen-lockfile
@@ -132,6 +142,9 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
           persist-credentials: false
+      - uses: ./.github/actions/private-read
+        with:
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
       - name: Read the pinned engine commits
         id: engine
         shell: bash
@@ -141,6 +154,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
           repository: StefanBartl/rules.nvim
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
           ref: ${{ steps.engine.outputs.commit }}
           path: engine/rules.nvim
           persist-credentials: false
