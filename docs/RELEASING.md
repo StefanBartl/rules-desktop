@@ -95,7 +95,8 @@ kit) live in the repository [appkit](https://github.com/WKDSteve/appkit):
 - the actions of the release-kit in the two workflows are pinned by the full commit of the same tag;
 - a change in `appkit` is released there first, then taken over here by raising the tag in all
   these places, in its own commit (`cargo update -p appkit-hub`, `cd ui && pnpm install`,
-  `python tools/check-appkit-pin.py`).
+  `python tools/check-appkit-pin.py`). All of it for the four apps in one command, from the clone of appkit:
+  `python tools/bump-apps.py vX.Y.Z` (`--dry-run` to look first, `--commit` to commit each app, it never pushes).
 
 ## Private repositories and the runner
 
