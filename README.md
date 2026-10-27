@@ -5,7 +5,7 @@ browse the rules, search them, and later create, change, retire and move them, i
 native app after that. The sibling of [tasks-desktop](https://github.com/WKDSteve/tasks-desktop), built on the same
 parts and meant to look and behave like it.
 
-**Status: early development. No release yet.** The newest state of `main` is on the pre-release [`latest`](https://github.com/WKDSteve/rules-desktop/releases/tag/latest) (a Windows program and a Linux archive, rebuilt after every green CI run, unsigned). The interface reads and writes: you can make, change, retire, reinstate and move rules, several at once, with Undo and a conflict center. It reads: the hub serves families, rules,
+**Status: early development. No release yet.** The newest state of `main` is on the pre-release [`latest`](https://github.com/WKDSteve/rules-desktop/releases/tag/latest) (a Windows program, rebuilt after every green CI run, unsigned; the repository is private, so a login with read access is needed). The interface reads and writes: you can make, change, retire, reinstate and move rules, several at once, with Undo and a conflict center. It reads: the hub serves families, rules,
 search, findings and the rule detail, follows the rule files live and passes its security matrix, axe and a corpus of
 hostile rules in the browser. The native shell and the waivers follow the phases below. It is not a release: use it to look, not to rely on. How to
 use it: [docs/USAGE.md](docs/USAGE.md), a walk through one sitting in [docs/WORKFLOW.md](docs/WORKFLOW.md); what it does about security: [docs/SECURITY.md](docs/SECURITY.md).
@@ -89,25 +89,30 @@ There are two channels, and both carry an install script that installs exactly t
 - **The rolling build** (the pre-release `latest`): the newest green commit of `main`, rebuilt after every CI run,
   for trying what is new and not for anything that matters.
 
+Both are Windows only: the repository is private and has no paid plan, so the builds run on the author's
+self-hosted Windows runner (see [docs/RELEASING.md](docs/RELEASING.md)); there is no Linux or macOS archive and no
+`install.sh`.
+
 The scripts need no administrator rights and install for one user, so they also work where SmartScreen stops a
-downloaded program. Run them in your own terminal (not elevated, not from inside a program that sandboxes AppData):
+downloaded program. Run them in your own terminal (not elevated, not from inside a program that sandboxes AppData).
+The repository is private: an anonymous download is answered with a login page, so fetch the script with `gh` and
+give it a token that may read the repository in `GH_TOKEN`:
 
 ```
-# the rolling build (Windows; Linux x86-64)
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/WKDSteve/rules-desktop/releases/download/latest/install.ps1 | iex"
-curl -fsSL https://github.com/WKDSteve/rules-desktop/releases/download/latest/install.sh | sh
+# the rolling build (Windows)
+gh release download latest -R WKDSteve/rules-desktop -p install.ps1 -D $env:TEMP --clobber
+$env:GH_TOKEN = (gh auth token); & "$env:TEMP\install.ps1"
 
-# a release: the same with the tag in place of latest, e.g. .../releases/download/v0.1.0/install.ps1
+# a release: the same with the tag in place of latest, e.g. gh release download v0.1.0 ...
 ```
 
 They download the program of that build, check it against its `SHA256SUMS` (a wrong or missing checksum installs
 nothing), and hand over to `rules-hub install`, which replaces the program in one step and brings a running hub
 back. The installation that is there is found and replaced, never a second one beside it: the script of `latest` run
 again updates to the newest rolling build, the script of a release run again repairs that release (to update, take
-the script of the newer release, or pass `-Version`/`-Rolling`). The `irm | iex` line takes no arguments; to pass some,
-make a script block of the text: `& ([scriptblock]::Create((irm .../install.ps1))) -InstallArgs '--autostart','--shortcut'`
-registers the hub with your login and adds a link (with the shell script saved: `sh install.sh -- --autostart --shortcut`).
-`-File FILE` (`--file`) installs from a file you already have, with `-Sums FILE` or `-Sha256 HEX`. Through
+the script of the newer release, or pass `-Version`/`-Rolling`). To pass arguments, add them to the call:
+`& "$env:TEMP\install.ps1" -InstallArgs '--autostart','--shortcut'` registers the hub with your login and adds a link.
+`-File FILE` installs from a file you already have, with `-Sums FILE` or `-Sha256 HEX`. Through
 `powershell -File` an array arrives as one string, so a saved `install.ps1` takes one `-InstallArgs` value there; in a
 PowerShell session a list is fine. The install
 scripts are the ones of appkit's [release-kit](https://github.com/WKDSteve/appkit/tree/main/release-kit), stamped
@@ -123,8 +128,8 @@ of the lock files, and a file built on the machine carries no mark for SmartScre
 ```
 
 ```
-sh scripts/uninstall.sh [--purge-settings]
 .\scripts\uninstall.ps1 [-PurgeSettings]
+sh scripts/uninstall.sh [--purge-settings]        # Linux/macOS, from source; not run by CI any more
 ```
 
 Uninstalling stops the hub, takes away the login entry and the link, and removes the program. Your settings stay
