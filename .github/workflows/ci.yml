@@ -6,7 +6,7 @@
 # `:MyPlugins runner start rules-desktop`). Without a running runner a push stays "Queued" (no red mark, discarded after
 # 24 h). Only for PRIVATE repos with trusted authors; no `pull_request` trigger on purpose (a PR would run its own
 # workflow with the author's rights on this machine). Windows only: the Linux legs of the former workflow (tests and
-# install scripts under sh, ShellCheck) are gone.
+# install scripts under sh) are gone; ShellCheck runs on the runner.
 #
 # The private sources (rules.nvim at the pinned commit of engine.lock, appkit through Cargo and pnpm) are fetched with
 # the credentials of the runner's user (`gh auth setup-git`), not with a token secret: the runner is this machine.
@@ -161,7 +161,6 @@ jobs:
           retention-days: 14
 
   # A control or invisible character in a tracked text file is refused; the tool tests itself.
-  # ShellCheck is not on the runner: the shell scripts are not checked by it any more.
   hygiene:
     runs-on: [self-hosted, windows]
     timeout-minutes: 10
@@ -173,3 +172,5 @@ jobs:
       - run: python tools/check-control-chars.py
       # A colour the CSS of the page states is a token of appkit-ui (the same check runs in appkit).
       - run: python tools/check-color-literals.py
+      # The shell scripts of the repository (NREL-16): ShellCheck is on the runner (`scoop install shellcheck`).
+      - run: shellcheck scripts/*.sh
