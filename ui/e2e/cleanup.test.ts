@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PREFIX, removeTree, stopChild, tempFile, tempRoot } from './cleanup';
+import { PREFIX, failAfterCleanup, removeTree, stopChild, tempFile, tempRoot } from './cleanup';
 import { teardown } from './global';
 import type { Running } from './hub';
 
@@ -42,6 +42,14 @@ describe('the temp dir of the browser tests', () => {
     });
     await expect(failing).rejects.toThrow(/cannot remove held: EBUSY/);
     expect(calls).toBe(3);
+  });
+
+  it('a failed cleanup after a failed start is named in the error, a good one leaves it as it was', async () => {
+    const started = new Error('the engine is not ready');
+    await expect(failAfterCleanup(started, () => Promise.resolve())).rejects.toBe(started);
+    const both = failAfterCleanup(started, () => Promise.reject(new Error('cannot remove held: EBUSY')));
+    await expect(both).rejects.toThrow('the engine is not ready; the cleanup failed too: cannot remove held: EBUSY');
+    await expect(both).rejects.toHaveProperty('cause', started);
   });
 
   it('a folder a running process holds goes once the process is stopped and waited for', async () => {

@@ -5,7 +5,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { removeTree, stopChild, tempRoot } from './cleanup';
+import { failAfterCleanup, removeTree, stopChild, tempRoot } from './cleanup';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '..', '..');
@@ -186,9 +186,8 @@ export async function startHub(): Promise<Running & { root: string }> {
   try {
     await waitUntilReady(config);
   } catch (error) {
-    // The hub that did not come up goes, and so does its folder: a failed start leaves nothing behind.
-    await stop().catch(() => undefined);
-    throw error;
+    // The hub that did not come up goes, and so does its folder: a failed start leaves nothing behind, or says so.
+    return failAfterCleanup(error, stop);
   }
   return { child, config, vault, root, stop };
 }

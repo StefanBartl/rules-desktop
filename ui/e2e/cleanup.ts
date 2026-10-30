@@ -49,8 +49,24 @@ export async function removeTree(path: string, options: RemoveOptions = {}): Pro
     }
     await new Promise((r) => setTimeout(r, pauseMs));
   }
-  const why = last instanceof Error ? last.message : String(last);
-  throw new Error(`cannot remove ${path}: ${why} (a process of the tests still holds a file in it?)`);
+  throw new Error(`cannot remove ${path}: ${messageOf(last)} (a process of the tests still holds a file in it?)`);
+}
+
+/**
+ * After `error` stopped a start: runs `cleanup`, then throws. `error` itself when the cleanup went well; otherwise an
+ * error that names both, so that a folder the cleanup could not remove is said and not left behind silently.
+ */
+export async function failAfterCleanup(error: unknown, cleanup: () => Promise<void>): Promise<never> {
+  try {
+    await cleanup();
+  } catch (cleanupError) {
+    throw new Error(`${messageOf(error)}; the cleanup failed too: ${messageOf(cleanupError)}`, { cause: error });
+  }
+  throw error;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** Ends `child` and waits until it has ended (at most `timeoutMs`), so that its files are no longer held. */

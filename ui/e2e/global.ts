@@ -1,5 +1,5 @@
 import { writeFileSync } from 'node:fs';
-import { removeTree, tempFile } from './cleanup';
+import { failAfterCleanup, removeTree, tempFile } from './cleanup';
 import { sessionToken, startHub, type Running } from './hub';
 
 // One file for one run: the workers inherit the variable from here.
@@ -30,10 +30,10 @@ export default async function setup(): Promise<() => Promise<void>> {
     const token = await sessionToken(running.config);
     writeFileSync(STATE, JSON.stringify({ config: running.config, vault: running.vault, token }));
   } catch (error) {
-    // Playwright runs no teardown when the setup fails: what was made so far goes here.
-    await teardown(running, STATE).catch(() => undefined);
+    // Playwright runs no teardown when the setup fails: what was made so far goes here (or the error says it stayed).
+    const made = running;
     running = null;
-    throw error;
+    return failAfterCleanup(error, () => teardown(made, STATE));
   }
   return () => teardown(running, STATE);
 }
