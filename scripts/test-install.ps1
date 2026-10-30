@@ -56,6 +56,28 @@ function Write-Check([bool] $Passed, [string] $Name) {
     else { Write-Output "FAIL $Name"; $script:failures++ }
 }
 
+# Remove the temp folder of the run. A folder that stays is a failure of the run, not a silent
+# leftover; a file that is held for a moment (a child process that has not quite let go, a virus
+# scanner) is tried again. Returns $null when the folder is gone, else what went wrong.
+# tools/test_test_install_cleanup.py calls this function on its own.
+function Remove-TempFolder {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'removes only the temp folder this script made')]
+    param([string] $Path, [int] $Attempts = 10, [int] $DelayMs = 200)
+    for ($attempt = 1; Test-Path -LiteralPath $Path; $attempt++) {
+        try {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+            if ($attempt -ge $Attempts) {
+                return "could not remove $Path after $Attempts attempts: $($_.Exception.Message)"
+            }
+            Start-Sleep -Milliseconds $DelayMs
+        }
+    }
+    return $null
+}
+
 # A build machine runs elevated (the runners of GitHub do): the scripts refuse that unless they are
 # told it is meant, and the refusal itself is checked below.
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -189,7 +211,11 @@ finally {
     foreach ($name in $saved.Keys) {
         [Environment]::SetEnvironmentVariable($name, $saved[$name])
     }
-    Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    $problem = Remove-TempFolder -Path $tmp
+    if ($null -ne $problem) {
+        Write-Output "FAIL $problem"
+        $script:failures++
+    }
 }
 
 if ($script:failures -ne 0) {

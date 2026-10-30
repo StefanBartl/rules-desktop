@@ -60,7 +60,8 @@ engine.lock         the rules.nvim and lib.nvim commits this is built and tested
 
 A test that needs a folder in the temp dir gets it from `Scratch` (Rust, `crates/rules-hub/tests/common/scratch.rs`)
 or from `ui/e2e/cleanup.ts` (browser tests), which remove it again, also after a failure; `crates/rules-hub/tests/temp_hygiene.rs`
-refuses a folder named by hand. `python tools/check-temp-leftovers.py` lists what is left of `rules-desktop-*` and
+refuses a folder named by hand; `scripts/test-install.ps1` fails when it cannot remove its folder (tried again for a
+file held for a moment). `python tools/check-temp-leftovers.py` lists what is left of `rules-desktop-*` and
 `rules-hub-*` in the temp dir; CI gives its test jobs a temp dir of their own and runs it there (`--strict` for Rust).
 
 ## Running the hub

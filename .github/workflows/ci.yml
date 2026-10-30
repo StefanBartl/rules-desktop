@@ -95,6 +95,11 @@ jobs:
         run: |
           pwsh -NoProfile -File scripts/test-install.ps1 target/debug/rules-hub.exe
           sh scripts/test-install.sh target/debug/rules-hub.exe
+      # The install tests make their folders (rules-desktop-test-install-*) in the temp dir of this job too, after the
+      # strict check above; test-install.ps1 fails on a folder it cannot remove, and this is the check that none stayed.
+      # Not strict: the child PowerShells may leave files of their own there.
+      - name: The install scripts left nothing in the temp dir
+        run: python tools/check-temp-leftovers.py --dir "$JOB_TEMP"
       - name: PSScriptAnalyzer on the scripts
         shell: pwsh
         run: |
