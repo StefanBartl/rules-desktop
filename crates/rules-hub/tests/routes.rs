@@ -42,6 +42,8 @@ struct FakeEngine {
     rule: Mutex<String>,
     /// What `ops` answers: the golden dry run, unless a test says what a write answers.
     ops: Mutex<String>,
+    /// While set, `snapshot` waits for a permit of it.
+    snapshot_gate: Mutex<Option<Arc<tokio::sync::Semaphore>>>,
     asked: Mutex<Vec<(&'static str, Option<Value>)>>,
 }
 
@@ -52,6 +54,7 @@ impl FakeEngine {
             hello: Mutex::new(Ok(HELLO.trim_end().to_owned())),
             rule: Mutex::new(RULE.trim_end().to_owned()),
             ops: Mutex::new(RESULT.trim_end().to_owned()),
+            snapshot_gate: Mutex::new(None),
             asked: Mutex::new(Vec::new()),
         })
     }
@@ -100,7 +103,13 @@ impl Engine for FakeEngine {
                     .unwrap()
                     .clone()
                     .map_err(|()| EngineError::Timeout)?,
-                "snapshot" => self.snapshot.lock().unwrap().clone(),
+                "snapshot" => {
+                    let gate = self.snapshot_gate.lock().unwrap().clone();
+                    if let Some(gate) = gate {
+                        drop(gate.acquire().await.unwrap());
+                    }
+                    self.snapshot.lock().unwrap().clone()
+                }
                 "rule" => {
                     let id = params.and_then(|p| p["id"].as_str()).unwrap_or_default();
                     if id != "DEP-01" {
@@ -125,6 +134,8 @@ impl Engine for FakeEngine {
 struct Hub {
     server: RunningServer,
     token: String,
+    /// The control secret: a test pairs further sessions with it.
+    control: Secret,
 }
 
 fn ready() -> HubStatus {
@@ -217,7 +228,11 @@ async fn start_all(
     .await
     .expect("the hub starts");
     let token = session(&server, &control).await;
-    Hub { server, token }
+    Hub {
+        server,
+        token,
+        control,
+    }
 }
 
 async fn start(engine: &Arc<FakeEngine>) -> Hub {
@@ -772,6 +787,24 @@ impl Stream {
         }
         self.seen.clone()
     }
+
+    /// Read until the hub closes the connection (the request says `Connection: close`, so the
+    /// end of the stream's body is the end of the connection); the whole text read.
+    async fn rest(&mut self) -> String {
+        let end = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            let left = end.saturating_duration_since(std::time::Instant::now());
+            let mut buf = [0u8; 4096];
+            let n = tokio::time::timeout(left, self.socket.read(&mut buf))
+                .await
+                .unwrap_or_else(|_| panic!("the stream did not end: {:?}", self.seen))
+                .unwrap_or(0);
+            if n == 0 {
+                return self.seen.clone();
+            }
+            self.seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+    }
 }
 
 #[tokio::test]
@@ -840,6 +873,47 @@ async fn a_session_has_a_few_streams_and_no_more() {
     let mut fifth = Stream::open(&hub).await;
     let said = fifth.until("\r\n\r\n").await;
     assert!(said.starts_with("HTTP/1.1 429"), "{said}");
+}
+
+/// K22: the session is checked before the hello too. The route waits for the snapshot the stream
+/// starts from (a scan of the engine), and the session may be closed meanwhile.
+#[tokio::test]
+async fn a_stream_whose_session_is_closed_while_it_opens_is_not_greeted() {
+    let engine = FakeEngine::new();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    *engine.snapshot_gate.lock().unwrap() = Some(Arc::clone(&gate));
+    let limits = Limits {
+        max_sessions: 2,
+        // Without the check before the hello, the next tick ends the stream: after the hello.
+        heartbeat: Duration::from_millis(200),
+        ..Limits::default()
+    };
+    let hub = start_limited(
+        Some(Arc::clone(&engine)),
+        limits,
+        Arc::default(),
+        None,
+        None,
+    )
+    .await;
+    let mut stream = Stream::open(&hub).await;
+    let end = std::time::Instant::now() + Duration::from_secs(15);
+    while engine.count("snapshot") == 0 {
+        assert!(std::time::Instant::now() < end, "no snapshot was asked");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // Two newer sessions close the one of the stream while it waits for the snapshot.
+    session(&hub.server, &hub.control).await;
+    session(&hub.server, &hub.control).await;
+    let closed = hub.get(&route("snapshot")).await;
+    assert_eq!(closed.status, 401, "the session is still open: {closed:?}");
+    gate.add_permits(1000);
+    let seen = stream.rest().await;
+    assert!(seen.starts_with("HTTP/1.1 200"), "{seen}");
+    assert!(
+        !seen.contains("event: hello"),
+        "a closed session was greeted: {seen}"
+    );
 }
 
 #[tokio::test]
