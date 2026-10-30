@@ -142,8 +142,10 @@ jobs:
           "TEMP=$dir", "TMP=$dir", "TMPDIR=$dir", "JOB_TEMP=$dir" | Add-Content -Path $env:GITHUB_ENV
       - run: pnpm test
       # Not strict: Node and vitest may keep caches of their own in the temp dir; the folders of the tests count.
+      # This job's own defaults leave the shell to the runner (PowerShell), so it is named and the variable read its way.
       - name: The tests left nothing in the temp dir
-        run: python ../tools/check-temp-leftovers.py --dir "$JOB_TEMP"
+        shell: pwsh
+        run: python ../tools/check-temp-leftovers.py --dir "$env:JOB_TEMP"
       - run: pnpm build
       - run: pnpm audit --audit-level high
 
