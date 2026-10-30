@@ -582,14 +582,10 @@ pub struct SourceFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
-    fn temp(name: &str, text: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "rules-desktop-sources-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+    fn temp(name: &str, text: &str) -> Scratch {
+        let dir = Scratch::new(&format!("sources-{name}"));
         std::fs::write(path(&dir), text).unwrap();
         dir
     }
@@ -608,9 +604,8 @@ mod tests {
 
     #[test]
     fn a_missing_file_classifies_nothing() {
-        let dir =
-            std::env::temp_dir().join(format!("rules-desktop-sources-none-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let base = Scratch::new("sources-none");
+        let dir = base.join("none");
         let policy = SourcePolicy::load(&dir).unwrap();
         assert!(policy.is_empty());
         assert_eq!(policy.default_class(), None);

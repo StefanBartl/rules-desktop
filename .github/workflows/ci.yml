@@ -72,7 +72,22 @@ jobs:
       # The tests of the program start the engine in a real Neovim.
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The tests of this job get a temp dir of their own, empty at the start: the shared one of the runner (the
+      # author's machine) holds the leftovers of earlier runs and the folders of other jobs, so a count in it would
+      # never be zero. TEMP and TMP are read on Windows, TMPDIR elsewhere. `New-Item` fails when the folder is there
+      # already, so "empty at the start" is checked, not assumed.
+      - name: Temp dir of this job
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "job-temp-$env:GITHUB_JOB-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+          "TEMP=$dir", "TMP=$dir", "TMPDIR=$dir", "JOB_TEMP=$dir" | Add-Content -Path $env:GITHUB_ENV
       - run: cargo test --workspace --locked
+      # No test left a folder in the temp dir of this job (a test makes its folder with `Scratch`, which removes it
+      # also after a failure). Strict: whatever name a test gave its folder counts; `nvim` and `nvim.0` are what the
+      # real Neovim of the engine tests may make itself.
+      - name: The tests left nothing in the temp dir
+        run: python tools/check-temp-leftovers.py --dir "$JOB_TEMP" --strict --allow nvim --allow nvim.0
       # The install script of a release (the one of appkit's release-kit that Cargo.lock pins) and the
       # uninstall scripts against this build, in folders of their own: the login entry and the link of
       # the runner are left alone, nothing is downloaded.
@@ -118,7 +133,17 @@ jobs:
       # (a global install would change this machine on every run).
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      # A temp dir of this job, empty at the start, as in the job rust.
+      - name: Temp dir of this job
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "job-temp-$env:GITHUB_JOB-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+          "TEMP=$dir", "TMP=$dir", "TMPDIR=$dir", "JOB_TEMP=$dir" | Add-Content -Path $env:GITHUB_ENV
       - run: pnpm test
+      # Not strict: Node and vitest may keep caches of their own in the temp dir; the folders of the tests count.
+      - name: The tests left nothing in the temp dir
+        run: python ../tools/check-temp-leftovers.py --dir "$JOB_TEMP"
       - run: pnpm build
       - run: pnpm audit --audit-level high
 
@@ -147,9 +172,20 @@ jobs:
           pnpm --dir ui install --frozen-lockfile
           pnpm --dir ui build
           cargo build --locked
+      # A temp dir of this job, empty at the start, as in the job rust.
+      - name: Temp dir of this job
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "job-temp-$env:GITHUB_JOB-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+          "TEMP=$dir", "TMP=$dir", "TMPDIR=$dir", "JOB_TEMP=$dir" | Add-Content -Path $env:GITHUB_ENV
       - name: Browser tests (Playwright, axe, hostile rules)
         working-directory: ui
         run: pnpm e2e
+      # The hub's folder and the state file of the run are gone (ui/e2e/cleanup.ts). Not strict: Chrome and
+      # Playwright keep caches of their own in the temp dir.
+      - name: The browser tests left nothing in the temp dir
+        run: python tools/check-temp-leftovers.py --dir "$JOB_TEMP"
       # A failed browser test leaves its trace (network, DOM, console) to read instead of a guess.
       - name: Traces of failed browser tests
         if: failure()

@@ -8,6 +8,10 @@ use std::time::{Duration, Instant};
 use rules_hub::client;
 use serde_json::Value;
 
+mod common;
+
+use common::scratch::Scratch;
+
 fn fixture_vault() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -15,10 +19,8 @@ fn fixture_vault() -> PathBuf {
         .join("vault")
 }
 
-fn config_dir(name: &str, sources: Option<&str>) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("rules-desktop-cli-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+fn config_dir(name: &str, sources: Option<&str>) -> Scratch {
+    let dir = Scratch::new(&format!("cli-{name}"));
     if let Some(text) = sources {
         std::fs::write(dir.join("sources.json"), text).unwrap();
     }
@@ -162,7 +164,7 @@ fn a_sources_file_that_cannot_be_used_stops_the_start() {
 /// A hub that runs in a child process, stopped when the test ends however it ends.
 struct Running {
     child: Child,
-    dir: PathBuf,
+    dir: Scratch,
     port: u16,
 }
 
@@ -170,7 +172,7 @@ impl Drop for Running {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.dir);
+        // The folder goes with the field, after the hub that held files in it has ended.
     }
 }
 
@@ -193,7 +195,7 @@ fn serve(name: &str, sources: Option<&str>) -> Running {
     serve_in(config_dir(name, sources))
 }
 
-fn serve_in(dir: PathBuf) -> Running {
+fn serve_in(dir: Scratch) -> Running {
     let port = free_port();
     let child = command(&dir, &["serve", "--port", &port.to_string()])
         .stdout(Stdio::null())
@@ -465,14 +467,12 @@ async fn the_search_reads_the_texts_through_the_real_engine() {
 
 #[tokio::test]
 async fn a_new_rule_file_shows_up_by_itself_and_a_rescan_is_accepted() {
-    let vault =
-        std::env::temp_dir().join(format!("rules-desktop-live-vault-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&vault);
+    let vault = Scratch::new("live-vault");
     copy_dir(&fixture_vault(), &vault);
     let dir = config_dir("live", Some(CLASSES));
     std::fs::write(
         dir.join("config.json"),
-        serde_json::json!({ "vault": vault }).to_string(),
+        serde_json::json!({ "vault": vault.path() }).to_string(),
     )
     .unwrap();
     let hub = serve_in(dir);
@@ -521,7 +521,6 @@ async fn a_new_rule_file_shows_up_by_itself_and_a_rescan_is_accepted() {
     })
     .await;
     assert!(has_rule(&snapshot, "BB-03"));
-    let _ = std::fs::remove_dir_all(&vault);
 }
 
 #[tokio::test]
@@ -583,8 +582,7 @@ async fn open_finds_the_file_by_the_place_the_engine_knows_not_by_the_name_in_th
     // Two rule sets outside the vault with the same last folder: the documents call them one/Checklists and
     // two/Checklists. Under `<vault>/rulesets/one/Checklists` lies a decoy of the first name that is not loaded
     // (the vault names its rule sets itself): a hub that puts the name under `rulesets/` opens the decoy.
-    let base = std::env::temp_dir().join(format!("rules-desktop-places-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
+    let base = Scratch::new("places");
     let (one, two) = (
         base.join("one").join("Checklists"),
         base.join("two").join("Checklists"),
@@ -652,7 +650,6 @@ async fn open_finds_the_file_by_the_place_the_engine_knows_not_by_the_name_in_th
             "{id}: the decoy was opened: {last}"
         );
     }
-    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// A rule as a file of its own (`<rule set>/_rules/<FAMILY>/<ID>.md`), the form `rules-ops/1` writes.
@@ -704,8 +701,7 @@ fn severity_of(snapshot: &Value, id: &str) -> Option<String> {
 
 #[tokio::test]
 async fn a_rule_is_changed_and_changed_back_through_the_real_engine_and_only_its_line_moves() {
-    let base = std::env::temp_dir().join(format!("rules-desktop-write-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
+    let base = Scratch::new("write");
     let set = base.join("set");
     let file = write_rule_file(&set, "WW-01", "recommended", "first");
     let other = write_rule_file(&set, "WW-02", "recommended", "second");
@@ -793,14 +789,12 @@ async fn a_rule_is_changed_and_changed_back_through_the_real_engine_and_only_its
     // A waiver needs the project of the device; there is none in this config, so the hub says so.
     let waive = serde_json::json!({ "ops": [{ "op": "waive", "id": "WW-01", "reason": "x" }] });
     assert_eq!(post_ops(&hub, &token, &waive).await.0, 409);
-    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[tokio::test]
 async fn waivers_are_made_renewed_and_removed_through_the_real_engine_in_the_project_of_the_device()
 {
-    let base = std::env::temp_dir().join(format!("rules-desktop-waivers-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
+    let base = Scratch::new("waivers");
     let set = base.join("set");
     write_rule_file(&set, "WW-01", "recommended", "first");
     let project = base.join("project");
@@ -894,13 +888,11 @@ async fn waivers_are_made_renewed_and_removed_through_the_real_engine_in_the_pro
     ] });
     assert_eq!(post_ops(&hub, &token, &hijack).await.0, 400);
     assert!(!elsewhere.join(".rules-waivers.json").exists());
-    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[tokio::test]
 async fn a_rule_set_is_made_moved_to_the_archive_and_brought_back_through_the_real_engine() {
-    let base = std::env::temp_dir().join(format!("rules-desktop-rulesets-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
+    let base = Scratch::new("rulesets");
     let vault = base.join("vault");
     let sets = vault.join("rulesets");
     let alpha = write_rule_file(&sets.join("alpha"), "AA-01", "recommended", "first");
@@ -978,6 +970,4 @@ async fn a_rule_set_is_made_moved_to_the_archive_and_brought_back_through_the_re
     let (_, bad) = post_ops(&hub, &token, &op("../x", "create_ruleset", false)).await;
     assert_eq!(bad["results"][0]["error"]["code"], "invalid_argument");
     assert!(!vault.join("x").exists());
-
-    let _ = std::fs::remove_dir_all(&base);
 }

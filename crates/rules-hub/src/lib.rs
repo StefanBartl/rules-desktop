@@ -32,6 +32,12 @@ pub mod ui;
 pub mod watch;
 pub mod write;
 
+// The one helper that gives a test a folder in the temp dir; the integration tests share the same file.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../tests/common/scratch.rs"]
+mod scratch;
+
 pub use routes::{MakeRoute, Shared, MAX_ID_BYTES, ROUTES};
 pub use runtime::{Editor, RulesRuntime, Watch};
 

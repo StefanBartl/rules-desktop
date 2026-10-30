@@ -169,14 +169,11 @@ fn content_type(path: &Path) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
+    use crate::scratch::Scratch;
 
-    fn temp(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("rules-desktop-ui-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+    fn temp(name: &str) -> Scratch {
+        let dir = Scratch::new(&format!("ui-{name}"));
         std::fs::create_dir_all(dir.join("assets")).unwrap();
         dir
     }
@@ -207,7 +204,6 @@ mod tests {
         ] {
             assert!(ui.get(no).is_none(), "{no}");
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -215,7 +211,6 @@ mod tests {
         let dir = temp("empty");
         assert!(UiFiles::load(&dir).is_err());
         assert!(!UiFiles::none().has_index());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -225,7 +220,6 @@ mod tests {
         let big = vec![b'x'; usize::try_from(MAX_FILE).unwrap() + 1];
         std::fs::write(dir.join("assets").join("big.js"), big).unwrap();
         assert!(UiFiles::load(&dir).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

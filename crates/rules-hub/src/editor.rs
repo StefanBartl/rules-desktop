@@ -219,6 +219,7 @@ fn is_plain_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
     fn none(_: &str) -> Option<PathBuf> {
         None
@@ -261,12 +262,8 @@ mod tests {
         assert!(plan(&nvim, &file, "macos", &none).is_none());
     }
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "rules-desktop-editor-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
+    fn scratch(name: &str) -> Scratch {
+        let dir = Scratch::new(&format!("editor-{name}"));
         std::fs::create_dir_all(dir.join("set").join("a")).unwrap();
         std::fs::create_dir_all(dir.join("other")).unwrap();
         std::fs::write(dir.join("set").join("a").join("x.md"), "x").unwrap();
@@ -362,11 +359,8 @@ mod tests {
 
     #[test]
     fn the_test_seam_writes_the_file_it_would_have_opened() {
-        let dir =
-            std::env::temp_dir().join(format!("rules-desktop-editor-log-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = Scratch::new("editor-log");
         let log = dir.join("opened.log");
-        let _ = std::fs::remove_file(&log);
         let env = Env::from_pairs([(
             "RULES_DESKTOP_EDITOR_LOG",
             log.to_string_lossy().into_owned(),

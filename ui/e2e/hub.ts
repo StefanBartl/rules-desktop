@@ -2,10 +2,10 @@
 // a copy of the synthetic fixture vault with hostile rules added. Nothing of a real rule set is ever used.
 
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { removeTree, stopChild, tempRoot } from './cleanup';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '..', '..');
@@ -80,7 +80,8 @@ export interface Running {
   child: ChildProcess;
   config: string;
   vault: string;
-  stop(): void;
+  /** Ends the hub, waits for it, and removes its folder in the temp dir (an error if that fails). */
+  stop(): Promise<void>;
 }
 
 /** A rule of the rule set the page may write: one file per rule, the only form `rules-ops/1` writes. */
@@ -120,7 +121,17 @@ export function changedFiles(vault: string): string[] {
 }
 
 export function prepareVault(): { root: string; vault: string; config: string } {
-  const root = mkdtempSync(join(tmpdir(), 'rules-desktop-e2e-'));
+  const root = tempRoot('e2e');
+  try {
+    return fillRoot(root);
+  } catch (error) {
+    // No process holds a file of it yet: one removal, here and now, before the error goes up.
+    rmSync(root, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function fillRoot(root: string): { root: string; vault: string; config: string } {
   const vault = join(root, 'vault');
   cpSync(join(repo, 'crates', 'rules-hub', 'tests', 'fixtures', 'vault'), vault, { recursive: true });
   writeFileSync(join(vault, 'rulesets', 'alpha', 'regeln', 'hostile.md'), hostileFile());
@@ -168,6 +179,22 @@ export async function startHub(): Promise<Running & { root: string }> {
   if (taken) throw new Error(`port ${PORT} is in use: stop the hub that runs there`);
   const { root, vault, config } = prepareVault();
   const child = spawn(exe, ['serve'], { env: env(config), stdio: 'ignore' });
+  const stop = async (): Promise<void> => {
+    await stopChild(child);
+    await removeTree(root);
+  };
+  try {
+    await waitUntilReady(config);
+  } catch (error) {
+    // The hub that did not come up goes, and so does its folder: a failed start leaves nothing behind.
+    await stop().catch(() => undefined);
+    throw error;
+  }
+  return { child, config, vault, root, stop };
+}
+
+/** Waits until the hub answers with a ready engine, has written `hub.json` and serves the current build. */
+async function waitUntilReady(config: string): Promise<void> {
   const deadline = Date.now() + 30_000;
   for (;;) {
     try {
@@ -178,41 +205,16 @@ export async function startHub(): Promise<Running & { root: string }> {
         throw new Error('the engine is not ready: set RULES_ENGINE_DIR and LIB_NVIM_DIR');
       }
     } catch (error) {
-      if (Date.now() > deadline || (error instanceof Error && error.message.includes('engine'))) {
-        child.kill();
-        throw error;
-      }
+      if (Date.now() > deadline || (error instanceof Error && error.message.includes('engine'))) throw error;
     }
     await new Promise((r) => setTimeout(r, 200));
   }
   // The port answers before `hub.json` is written, and `rules-hub open` (the pairing of the tests) needs that file.
   while (!existsSync(join(config, 'hub.json'))) {
-    if (Date.now() > deadline) {
-      child.kill();
-      throw new Error('the hub answers but wrote no hub.json');
-    }
+    if (Date.now() > deadline) throw new Error('the hub answers but wrote no hub.json');
     await new Promise((r) => setTimeout(r, 100));
   }
-  try {
-    await assertFreshBinary();
-  } catch (error) {
-    child.kill();
-    throw error;
-  }
-  return {
-    child,
-    config,
-    vault,
-    root,
-    stop() {
-      child.kill();
-      try {
-        rmSync(root, { recursive: true, force: true });
-      } catch {
-        // a file the engine still holds; the temp folder is cleaned later
-      }
-    },
-  };
+  await assertFreshBinary();
 }
 
 /**

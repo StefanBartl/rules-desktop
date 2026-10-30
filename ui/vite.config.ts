@@ -15,6 +15,7 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    // e2e/*.test.ts: the cleanup of the browser tests, checked without a hub (the browser tests are e2e/*.spec.ts).
+    include: ['src/**/*.test.ts', 'e2e/**/*.test.ts'],
   },
 });

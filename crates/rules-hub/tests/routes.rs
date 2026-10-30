@@ -17,6 +17,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 mod common;
 
+use common::scratch::Scratch;
 use common::{get, get_with, post, session};
 
 const HELLO: &str = include_str!("fixtures/golden/hello.json");
@@ -684,9 +685,7 @@ async fn a_broken_file_list_costs_the_sources_route_but_not_the_rules() {
 /// such a file is tested once the program's `serve` does.
 #[test]
 fn a_sources_json_with_a_hash_key_does_not_load() {
-    let dir = std::env::temp_dir().join(format!("rules-hub-routes-hash-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("routes-hash");
     std::fs::write(
         rules_hub::sources::path(&dir),
         r#"{"schema":1,"sources":{"Checklists#2":{"class":"public"}}}"#,
@@ -714,10 +713,8 @@ fn quick() -> rules_hub::store::RefreshOptions {
 }
 
 /// A folder to watch, shaped like a vault.
-fn watched(name: &str) -> std::path::PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("rules-desktop-live-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+fn watched(name: &str) -> Scratch {
+    let dir = Scratch::new(&format!("live-{name}"));
     std::fs::create_dir_all(dir.join("rulesets").join("alpha")).unwrap();
     dir
 }
@@ -982,8 +979,7 @@ async fn a_bad_search_is_refused_before_the_index_is_asked() {
 
 #[tokio::test]
 async fn the_page_of_a_folder_is_served_to_everybody_and_nothing_else_of_it() {
-    let dir = std::env::temp_dir().join(format!("rules-desktop-page-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("page");
     std::fs::create_dir_all(dir.join("assets")).unwrap();
     std::fs::write(dir.join("index.html"), "<!doctype html><title>x</title>").unwrap();
     std::fs::write(dir.join("assets").join("app-1.js"), "export {};").unwrap();
@@ -1020,7 +1016,6 @@ async fn the_page_of_a_folder_is_served_to_everybody_and_nothing_else_of_it() {
         csp.contains("script-src 'self'") && !csp.contains("unsafe"),
         "{csp}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // Opening the file of a rule in an editor.
@@ -1109,10 +1104,8 @@ async fn start_editing() -> Opening {
 }
 
 /// A rule set with a file in it, somewhere that is nothing like `<vault>/rulesets/<name in the document>`.
-fn ruleset(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-    let root =
-        std::env::temp_dir().join(format!("rules-desktop-open-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+fn ruleset(name: &str) -> (Scratch, std::path::PathBuf) {
+    let root = Scratch::new(&format!("open-{name}"));
     std::fs::create_dir_all(root.join("sub")).unwrap();
     let file = root.join("sub").join("one.md");
     std::fs::write(&file, "# one\n").unwrap();
@@ -1124,7 +1117,7 @@ async fn the_file_comes_from_the_engine_and_not_from_the_name_in_the_document() 
     let o = start_editing().await;
     // The golden rule says its source is `Checklists/DEP.md`; its file is somewhere that name does not lead to.
     let (root, file) = ruleset("place");
-    o.says(&file, Some(&root));
+    o.says(&file, Some(root.path()));
     let r = o.open(r#"{"id":"DEP-01"}"#).await;
     assert_eq!(r.status, 200, "{r:?}");
     let seen = o.opened();
@@ -1141,7 +1134,7 @@ async fn the_file_comes_from_the_engine_and_not_from_the_name_in_the_document() 
 async fn only_a_rule_of_the_snapshot_is_asked_for() {
     let o = start_editing().await;
     let (root, file) = ruleset("known");
-    o.says(&file, Some(&root));
+    o.says(&file, Some(root.path()));
     // An id the snapshot does not hold reaches neither the engine nor the locator.
     for body in [r#"{"id":"NOPE-01"}"#, r#"{"id":"../x"}"#] {
         let r = o.open(body).await;
@@ -1188,24 +1181,24 @@ async fn a_file_outside_the_ruleset_the_engine_names_is_not_opened() {
         (
             "a file of another rule set",
             other_file.clone(),
-            Some(&root),
+            Some(root.path()),
         ),
-        ("a climb out of the rule set", climbing, Some(&root)),
+        ("a climb out of the rule set", climbing, Some(root.path())),
         (
             "a rule set that is not there",
             file.clone(),
             Some(std::path::Path::new("/no/such/set")),
         ),
-        ("a folder", root.join("sub"), Some(&root)),
+        ("a folder", root.join("sub"), Some(root.path())),
         (
             "a file that is not there",
             root.join("sub").join("gone.md"),
-            Some(&root),
+            Some(root.path()),
         ),
         (
             "a relative place",
             std::path::PathBuf::from("sub/one.md"),
-            Some(&root),
+            Some(root.path()),
         ),
         ("no rule set at all", file.clone(), None),
     ];
@@ -1224,10 +1217,10 @@ async fn a_file_outside_the_ruleset_the_engine_names_is_not_opened() {
 async fn a_link_in_the_ruleset_does_not_lead_out_of_it() {
     let o = start_editing().await;
     let (root, _) = ruleset("link");
-    let (_, outside) = ruleset("linked");
+    let (_linked, outside) = ruleset("linked");
     let link = root.join("sub").join("link.md");
     std::os::unix::fs::symlink(&outside, &link).unwrap();
-    o.says(&link, Some(&root));
+    o.says(&link, Some(root.path()));
     let r = o.open(r#"{"id":"DEP-01"}"#).await;
     assert_eq!(r.status, 400, "{r:?}");
     assert!(o.opened().is_empty());
@@ -1745,14 +1738,8 @@ async fn a_rule_set_with_rules_goes_to_the_archive_only_if_it_has_a_class_and_go
 
 // ── the data classes the page may change ────────────────────────────────────────
 
-fn temp_config(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "rules-desktop-policy-{name}-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn temp_config(name: &str) -> Scratch {
+    Scratch::new(&format!("policy-{name}"))
 }
 
 async fn start_with_config(
@@ -1802,7 +1789,7 @@ async fn a_class_that_holds_back_more_is_written_and_in_force_at_once() {
     let engine = FakeEngine::new();
     let dir = temp_config("tighten");
     let policy = SourcePolicy::new([("Checklists".to_owned(), Class::Internal)]).unwrap();
-    let hub = start_with_config(&engine, policy, Some(&dir)).await;
+    let hub = start_with_config(&engine, policy, Some(dir.path())).await;
 
     let r = hub
         .set_class(json!({ "key": "Checklists", "class": "private" }))
@@ -1816,7 +1803,6 @@ async fn a_class_that_holds_back_more_is_written_and_in_force_at_once() {
     let sources = hub.get(&route("sources")).await.json();
     assert_eq!(sources["keys"][0]["class"], "private", "{sources}");
     assert_eq!(sources["private"].as_array().map(Vec::len), Some(3));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
@@ -1824,7 +1810,7 @@ async fn a_class_that_releases_more_needs_the_word_of_the_person_and_a_bad_chang
     let engine = FakeEngine::new();
     let dir = temp_config("loosen");
     let policy = SourcePolicy::new([("Checklists".to_owned(), Class::Private)]).unwrap();
-    let hub = start_with_config(&engine, policy, Some(&dir)).await;
+    let hub = start_with_config(&engine, policy, Some(dir.path())).await;
     let file = dir.join("sources.json");
 
     // Private to public releases the rule set: refused until the request says it is meant.
@@ -1871,7 +1857,6 @@ async fn a_class_that_releases_more_needs_the_word_of_the_person_and_a_bad_chang
         assert_eq!(r.status, 400, "{name}: {r:?}");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), before, "{name}");
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
@@ -1879,7 +1864,7 @@ async fn a_rule_set_that_gets_a_class_may_be_written_from_then_on() {
     // The class decides whether the page writes (the check before the engine is asked works on the policy in force).
     let engine = FakeEngine::new();
     let dir = temp_config("write");
-    let hub = start_with_config(&engine, SourcePolicy::default(), Some(&dir)).await;
+    let hub = start_with_config(&engine, SourcePolicy::default(), Some(dir.path())).await;
     assert_eq!(hub.ops(&ops_body("set", true)).await.status, 403);
     let r = hub
         .set_class(json!({ "key": "Checklists", "class": "internal", "confirm_loosen": true }))
@@ -1894,5 +1879,4 @@ async fn a_rule_set_that_gets_a_class_may_be_written_from_then_on() {
         200
     );
     assert_eq!(hub.ops(&ops_body("set", true)).await.status, 403);
-    let _ = std::fs::remove_dir_all(&dir);
 }

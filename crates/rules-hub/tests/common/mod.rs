@@ -2,6 +2,8 @@
 
 #![allow(dead_code)]
 
+pub mod scratch;
+
 use appkit_core::authn::Secret;
 use appkit_hub::RunningServer;
 use appkit_testkit::wire::{request, send, Reply};
