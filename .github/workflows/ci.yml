@@ -1,15 +1,14 @@
 # CI of rules-desktop.
 #
-# Runs on a self-hosted runner (the author's Windows machine): the repository is private and has no paid plan, so
-# hosted runners do not start (billing/spending-limit errors, not a code problem). Runner: $REPOS_DIR/tasks-vault/
-# TOOLS/self-hosted-runner.md; start it with `scripts/runners.ps1 ensure rules-desktop` of the nvim config (or
-# `:MyPlugins runner start rules-desktop`). Without a running runner a push stays "Queued" (no red mark, discarded after
-# 24 h). Only for PRIVATE repos with trusted authors; no `pull_request` trigger on purpose (a PR would run its own
-# workflow with the author's rights on this machine). Windows only: the Linux legs of the former workflow (tests and
-# install scripts under sh) are gone; ShellCheck runs on the runner.
+# Runs on the maintainer's self-hosted Windows runner, by choice: the build needs the same Neovim, Chrome and
+# toolchain the app is used with. Without a running runner a push stays "Queued" (no red mark, discarded after 24 h).
+# Triggered only by pushes to main, never by `pull_request` or `pull_request_target`: a pull request from a fork
+# could change the workflow and run its own code on that machine. Windows only: the Linux legs of the former
+# workflow (tests and install scripts under sh) are gone; ShellCheck runs on the runner.
 #
-# The private sources (rules.nvim at the pinned commit of engine.lock, appkit through Cargo and pnpm) are fetched with
-# the credentials of the runner's user (`gh auth setup-git`), not with a token secret: the runner is this machine.
+# The sources outside this repository (rules.nvim and lib.nvim at the pinned commits of engine.lock, appkit through
+# Cargo and pnpm) are fetched with the Git credentials of the runner's user (`gh auth setup-git`), not with a token
+# secret.
 # Tools (cargo, clippy, rustfmt, cargo-audit, cargo-deny, nvim, pnpm, python, Chrome) are expected on the PATH and not
 # pinned here; the jobs print their versions.
 
@@ -47,7 +46,7 @@ jobs:
         with:
           persist-credentials: false
       # The pins must exist: a typo in engine.lock fails here, not later.
-      - name: Fetch the pinned engine (rules.nvim is private) and lib.nvim
+      - name: Fetch the pinned engine (rules.nvim) and lib.nvim
         run: |
           commit="$(sed -n 's/^commit *= *//p' engine.lock)"
           lib_commit="$(sed -n 's/^lib_commit *= *//p' engine.lock)"
@@ -163,7 +162,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
           persist-credentials: false
-      - name: Fetch the pinned engine (rules.nvim is private) and lib.nvim
+      - name: Fetch the pinned engine (rules.nvim) and lib.nvim
         run: |
           commit="$(sed -n 's/^commit *= *//p' engine.lock)"
           lib_commit="$(sed -n 's/^lib_commit *= *//p' engine.lock)"

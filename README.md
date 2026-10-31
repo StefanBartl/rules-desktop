@@ -95,8 +95,7 @@ There are two channels, and both carry an install script that installs exactly t
 - **The rolling build** (the pre-release `latest`): the newest green commit of `main`, rebuilt after every CI run,
   for trying what is new and not for anything that matters.
 
-Both are Windows only: the repository is private and has no paid plan, so the builds run on the author's
-self-hosted Windows runner (see [docs/RELEASING.md](docs/RELEASING.md)); there is no Linux or macOS archive and no
+Both are Windows only: the builds run on the maintainer's self-hosted Windows runner (see [docs/RELEASING.md](docs/RELEASING.md)); there is no Linux or macOS archive and no
 `install.sh`.
 
 The scripts need no administrator rights and install for one user, so they also work where SmartScreen stops a

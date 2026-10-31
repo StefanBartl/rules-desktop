@@ -9,10 +9,10 @@
 #   uninstall.ps1                       the script of scripts/ at this commit
 #   SHA256SUMS                          the checksums of all of them
 #
-# Runs on the self-hosted Windows runner of the author (the repository is private and has no paid plan, so
-# hosted runners do not start; see $REPOS_DIR/tasks-vault/TOOLS/self-hosted-runner.md), so only Windows is
-# built: the Linux archive and install.sh of the earlier hosted workflow are gone. The release-kit actions
-# run there by Git Bash (appkit v0.23.1 and later). The private source of appkit is read with the login of
+# Runs on the maintainer's self-hosted Windows runner (by choice, see docs/RELEASING.md), so only Windows is
+# built: the Linux archive and install.sh of the earlier hosted workflow are gone. It follows only CI runs
+# that came from a push to main (ci.yml has no pull request trigger, and `prepare` checks the event again).
+# The release-kit actions run there by Git Bash (appkit v0.23.1 and later). appkit is read with the login of
 # `gh` (.github/actions/pnpm-auth, Git's own credentials), not with a token secret.
 #
 # Deciding (only the tip of main is built) and publishing (SHA256SUMS first, the words of the page

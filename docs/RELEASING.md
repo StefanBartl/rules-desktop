@@ -14,8 +14,7 @@ machine.
 | `SHA256SUMS` | the checksum of every file above |
 
 (Earlier plans had a Linux and a macOS archive, `install.sh` and `uninstall.sh`; they need hosted runners,
-which a private repository without a paid plan does not have. See *Private repositories and the runner*
-below.)
+and the builds run on a self-hosted Windows runner. See *The runner* below.)
 
 The native shell with a Setup (`*-setup.exe`, and, if they return, `.dmg` and a Linux package) is the Tauri task; this
 workflow gets a `bundle` job when it exists. The scripts stay in any case: they are the way for a
@@ -98,21 +97,24 @@ kit) live in the repository [appkit](https://github.com/WKDSteve/appkit):
   `python tools/check-appkit-pin.py`). All of it for the four apps in one command, from the clone of appkit:
   `python tools/bump-apps.py vX.Y.Z` (`--dry-run` to look first, `--commit` to commit each app, it never pushes).
 
-## Private repositories and the runner
+## The runner
 
-The repository is private and has no paid plan, so CI (`ci.yml`), the rolling build (`rolling.yml`) and the release
-(`release.yml`) all run on the self-hosted Windows runner of the author (`runs-on: [self-hosted, windows]`, Git Bash
-by its full path). Start it with `pwsh $env:NVIM_CONFIG_DIR\scripts\runners.ps1 ensure <repo>`; without it a push or a
-tag stays "queued" (no red mark, discarded after 24 h). Set-up and traps: `tasks-vault/TOOLS/self-hosted-runner.md`.
+CI (`ci.yml`), the rolling build (`rolling.yml`) and the release (`release.yml`) all run on the maintainer's
+self-hosted Windows runner (`runs-on: [self-hosted, windows]`, Git Bash by its full path). That is a choice, not a
+limit: the builds use the same Neovim, Chrome and toolchain the app is used with. Without a running runner a push or
+a tag stays "queued" (no red mark, discarded after 24 h).
 
+- The workflows start only on a push to `main`, a pushed tag, or a finished CI run of such a push. None of them has a
+  `pull_request` or `pull_request_target` trigger: a pull request from a fork could change the workflow and run its
+  code on the runner's machine. Fork pull requests also need the maintainer's approval before any workflow runs.
 - Only Windows is built and tested: there is no Linux or macOS archive and no `install.sh` any more.
-- The private sources (the engine at the pinned commit of `engine.lock`, appkit through Cargo and pnpm) are read with
-  the login of `gh` and Git's own credentials (`.github/actions/pnpm-auth` hands the token to pnpm for the length of
-  one job). There is no token secret.
+- The sources outside this repository (the engine at the pinned commits of `engine.lock`, appkit through Cargo and
+  pnpm) are read with the login of `gh` and Git's own credentials (`.github/actions/pnpm-auth` hands the token to pnpm
+  for the length of one job, as long as appkit is not public). There is no token secret.
 - `release-kit` of appkit runs on the runner from v0.23.1 on (Git Bash by its full path); the apps pin it by the
   commit of the tag that `Cargo.lock` pins.
-- Installing from this private repository needs `GH_TOKEN` (`$env:GH_TOKEN = (gh auth token)`): see the notes of the
-  release page and the release-kit README of appkit.
+- While the repository is private, installing from it needs `GH_TOKEN` (`$env:GH_TOKEN = (gh auth token)`): see the
+  notes of the release page and the release-kit README of appkit.
 
 ## Not yet
 

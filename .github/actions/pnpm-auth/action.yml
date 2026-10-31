@@ -1,10 +1,11 @@
-# pnpm downloads appkit-ui (`github:WKDSteve/appkit#<tag>`) as a tarball from codeload.github.com, and appkit is
-# private: the download needs a token. On the self-hosted runner the token is the one of `gh` (the author's login on
-# this machine); it goes into a config file of this job only (RUNNER_TEMP is thrown away after the job) and is
-# handed to pnpm through NPM_CONFIG_USERCONFIG, never into the user's own ~/.npmrc.
+# pnpm downloads appkit-ui (`github:WKDSteve/appkit#<tag>`) as a tarball from codeload.github.com; while appkit is
+# not public, the download needs a token. On the self-hosted runner the token is the one of `gh` (the maintainer's
+# login on that machine); it goes into a config file of this job only (RUNNER_TEMP is thrown away after the job) and
+# is handed to pnpm through NPM_CONFIG_USERCONFIG, never into the user's own ~/.npmrc.
 # Git needs nothing: `gh auth setup-git` makes it use the same login.
+# Once appkit is public this action is no longer needed and can be removed with its `uses:` lines.
 name: pnpm-auth
-description: Let pnpm read the private appkit on the self-hosted runner.
+description: Let pnpm read appkit on the self-hosted runner while appkit is not public.
 runs:
   using: composite
   steps:
