@@ -111,6 +111,9 @@ irm https://github.com/WKDSteve/rules-desktop/releases/download/latest/install.p
 # (once there is a release, .../releases/latest/download/install.ps1 is the newest one)
 ```
 
+`irm -OutFile` leaves no download mark on the file. A script saved from the release page with the browser carries
+one, and PowerShell refuses it as unsigned ("is not digitally signed"): run `Unblock-File` on it first.
+
 They download the program of that build, check it against its `SHA256SUMS` (a wrong or missing checksum installs
 nothing), and hand over to `rules-hub install`, which replaces the program in one step and brings a running hub
 back. The installation that is there is found and replaced, never a second one beside it: the script of `latest` run

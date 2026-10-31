@@ -2,14 +2,14 @@
 
 **Windows only** (x86-64). The files of this page are plain downloads: no GitHub login and no token.
 
-**Install it with the script** (for the current user, no administrator rights, and no SmartScreen stop: the script downloads the program itself and checks it against `SHA256SUMS`). Save it from this page, or in PowerShell (not elevated):
+**Install it with the script** (for the current user, no administrator rights, and no SmartScreen stop: the script downloads the program itself and checks it against `SHA256SUMS`). In PowerShell (not elevated):
 
 ```
 irm https://github.com/WKDSteve/rules-desktop/releases/download/latest/install.ps1 -OutFile install.ps1
 .\install.ps1
 ```
 
-Run it again to update to the newest rolling build.
+Run it again to update to the newest rolling build. If you save `install.ps1` from this page with the browser instead, run `Unblock-File .\install.ps1` first: the browser marks the file as downloaded, and PowerShell refuses such an unsigned script ("is not digitally signed").
 
 Or take the file yourself: `rules-hub-windows-x86_64.exe`. A double click starts the hub in the background and opens the browser (a second click finds the running hub). Windows SmartScreen warns about an unsigned program: "More info", then "Run anyway". `uninstall.ps1` removes it again; `SHA256SUMS` holds the checksums of all files.
 
