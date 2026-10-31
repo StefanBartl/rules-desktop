@@ -5,7 +5,7 @@ browse the rules, search them, and later create, change, retire and move them, i
 native app after that. The sibling of [tasks-desktop](https://github.com/WKDSteve/tasks-desktop), built on the same
 parts and meant to look and behave like it.
 
-**Status: early development. No release yet.** The newest state of `main` is on the pre-release [`latest`](https://github.com/WKDSteve/rules-desktop/releases/tag/latest) (a Windows program, rebuilt after every green CI run, unsigned; the repository is private, so a login with read access is needed). The interface reads and writes: you can make, change, retire, reinstate and move rules, several at once, with Undo and a conflict center. It reads: the hub serves families, rules,
+**Status: early development. No release yet.** The newest state of `main` is on the pre-release [`latest`](https://github.com/WKDSteve/rules-desktop/releases/tag/latest) (a Windows program, rebuilt after every green CI run, unsigned; a plain download, no GitHub login needed). The interface reads and writes: you can make, change, retire, reinstate and move rules, several at once, with Undo and a conflict center. It reads: the hub serves families, rules,
 search, findings and the rule detail, follows the rule files live and passes its security matrix, axe and a corpus of
 hostile rules in the browser. The native shell and the waivers follow the phases below. It is not a release: use it to look, not to rely on. How to
 use it: [docs/USAGE.md](docs/USAGE.md), a walk through one sitting in [docs/WORKFLOW.md](docs/WORKFLOW.md); what it does about security: [docs/SECURITY.md](docs/SECURITY.md).
@@ -100,15 +100,15 @@ Both are Windows only: the builds run on the maintainer's self-hosted Windows ru
 
 The scripts need no administrator rights and install for one user, so they also work where SmartScreen stops a
 downloaded program. Run them in your own terminal (not elevated, not from inside a program that sandboxes AppData).
-The repository is private: an anonymous download is answered with a login page, so fetch the script with `gh` and
-give it a token that may read the repository in `GH_TOKEN`:
+The repository is public: the script is a plain download, with no GitHub login and no token:
 
 ```
 # the rolling build (Windows)
-gh release download latest -R WKDSteve/rules-desktop -p install.ps1 -D $env:TEMP --clobber
-$env:GH_TOKEN = (gh auth token); & "$env:TEMP\install.ps1"
+irm https://github.com/WKDSteve/rules-desktop/releases/download/latest/install.ps1 -OutFile $env:TEMP\install.ps1
+& "$env:TEMP\install.ps1"
 
-# a release: the same with the tag in place of latest, e.g. gh release download v0.1.0 ...
+# a release: the same with the tag in place of latest, e.g. .../releases/download/v0.1.0/install.ps1
+# (once there is a release, .../releases/latest/download/install.ps1 is the newest one)
 ```
 
 They download the program of that build, check it against its `SHA256SUMS` (a wrong or missing checksum installs

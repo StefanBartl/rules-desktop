@@ -1,11 +1,12 @@
 **This is not a release.** It is the newest state of `main`, rebuilt after every green CI run and replaced each time. Nothing here is signed or tested by hand; use a release for anything that matters. The program reads the rule set and can make, change, retire, reinstate and move rules, with Undo and a conflict center; a rule set with no class on the device is never written.
 
-**Windows only** (x86-64). The repository is private: the files of this page are not public, and the install script needs a GitHub login that can read it (`gh auth login`, or a token with read access in `GH_TOKEN`).
+**Windows only** (x86-64). The files of this page are plain downloads: no GitHub login and no token.
 
-**Install it with the script** (for the current user, no administrator rights, and no SmartScreen stop: the script downloads the program itself and checks it against `SHA256SUMS`). Save it from this page (`gh release download latest -R WKDSteve/rules-desktop -p install.ps1`), then:
+**Install it with the script** (for the current user, no administrator rights, and no SmartScreen stop: the script downloads the program itself and checks it against `SHA256SUMS`). Save it from this page, or in PowerShell (not elevated):
 
 ```
-$env:GH_TOKEN = (gh auth token); .\install.ps1
+irm https://github.com/WKDSteve/rules-desktop/releases/download/latest/install.ps1 -OutFile install.ps1
+.\install.ps1
 ```
 
 Run it again to update to the newest rolling build.

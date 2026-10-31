@@ -112,8 +112,8 @@ a tag stays "queued" (no red mark, discarded after 24 h).
   pnpm) are public and read without credentials. There is no token secret.
 - `release-kit` of appkit runs on the runner from v0.23.1 on (Git Bash by its full path); the apps pin it by the
   commit of the tag that `Cargo.lock` pins.
-- While the repository is private, installing from it needs `GH_TOKEN` (`$env:GH_TOKEN = (gh auth token)`): see the
-  notes of the release page and the release-kit README of appkit.
+- The repository is public: the install script and the files it fetches are plain downloads, with no login and no
+  `GH_TOKEN` (the script still accepts one, see the release-kit README of appkit).
 
 ## Not yet
 

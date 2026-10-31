@@ -3,13 +3,13 @@ The hub as a program for Windows, with the interface inside it. The program read
 ## Install
 
 Without administrator rights, for one user. The `install.ps1` of this release installs exactly this release: it
-downloads the archive, checks it against `SHA256SUMS` and hands over to `rules-hub install`. The repository is private,
-so the script needs a GitHub login that can read it: save it from this page and run it in your own terminal
-(PowerShell not elevated) with a token:
+downloads the archive, checks it against `SHA256SUMS` and hands over to `rules-hub install`. No GitHub login
+or token is needed: save it from this page (or with the command below) and run it in your own terminal (PowerShell
+not elevated):
 
 ```
-gh release download {tag} -R WKDSteve/rules-desktop -p install.ps1
-$env:GH_TOKEN = (gh auth token); .\install.ps1
+irm https://github.com/WKDSteve/rules-desktop/releases/download/{tag}/install.ps1 -OutFile install.ps1
+.\install.ps1
 ```
 
 To register the hub with your login and add a link, pass the arguments: `.\install.ps1 -InstallArgs '--autostart','--shortcut'`.
