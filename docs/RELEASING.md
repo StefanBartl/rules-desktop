@@ -109,8 +109,7 @@ a tag stays "queued" (no red mark, discarded after 24 h).
   code on the runner's machine. Fork pull requests also need the maintainer's approval before any workflow runs.
 - Only Windows is built and tested: there is no Linux or macOS archive and no `install.sh` any more.
 - The sources outside this repository (the engine at the pinned commits of `engine.lock`, appkit through Cargo and
-  pnpm) are read with the login of `gh` and Git's own credentials (`.github/actions/pnpm-auth` hands the token to pnpm
-  for the length of one job, as long as appkit is not public). There is no token secret.
+  pnpm) are public and read without credentials. There is no token secret.
 - `release-kit` of appkit runs on the runner from v0.23.1 on (Git Bash by its full path); the apps pin it by the
   commit of the tag that `Cargo.lock` pins.
 - While the repository is private, installing from it needs `GH_TOKEN` (`$env:GH_TOKEN = (gh auth token)`): see the

@@ -12,8 +12,8 @@
 # Runs on the maintainer's self-hosted Windows runner (by choice, see docs/RELEASING.md), so only Windows is
 # built: the Linux archive and install.sh of the earlier hosted workflow are gone. It follows only CI runs
 # that came from a push to main (ci.yml has no pull request trigger, and `prepare` checks the event again).
-# The release-kit actions run there by Git Bash (appkit v0.23.1 and later). appkit is read with the login of
-# `gh` (.github/actions/pnpm-auth, Git's own credentials), not with a token secret.
+# The release-kit actions run there by Git Bash (appkit v0.23.1 and later). appkit is public and read
+# without credentials.
 #
 # Deciding (only the tip of main is built) and publishing (SHA256SUMS first, the words of the page
 # last) are the actions prepare and publish of appkit's release-kit, pinned by the commit of the tag
@@ -82,7 +82,6 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
-      - uses: ./.github/actions/pnpm-auth
       # The interface is part of the binary (NREL-04): it is built first, then the program.
       - name: Build the interface
         working-directory: ui
